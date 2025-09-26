@@ -1,3 +1,4 @@
+#http://localhost:8501/
 import streamlit as st
 import pandas as pd
 import os
@@ -5,6 +6,69 @@ import glob
 from datetime import datetime
 import tempfile
 import shutil
+
+# 导入智能列识别函数
+from smart_column_functions import find_header_row, identify_key_columns, identify_columns_by_pattern, is_phone_number
+
+def smart_column_detection(df, filename):
+    """
+    智能识别表格中的姓名、联系方式、收货地址等信息，不依赖固定的列名和行号
+    """
+    try:
+        # 第一步：找到真正的表头行
+        header_row_idx = find_header_row(df)
+        
+        # 如果找到了表头行，重新设置列名
+        if header_row_idx is not None and header_row_idx > 0:
+            # 保存原始列名以备后用
+            original_columns = df.columns.tolist()
+            # 设置新的列名
+            df.columns = df.iloc[header_row_idx].values
+            # 只保留表头行之后的数据
+            df = df.iloc[header_row_idx+1:].reset_index(drop=True)
+        
+        # 第二步：智能匹配关键列
+        column_mapping = identify_key_columns(df)
+        
+        # 第三步：提取数据
+        extracted_data = []
+        
+        for index, row in df.iterrows():
+            try:
+                # 创建一个新的数据项
+                item = {
+                    '客户名称': '',
+                    '收货地址': '',
+                    '收货人': '',
+                    '手机': '',
+                    '客户备注': '',  # 新增客户备注字段
+                    '源文件': filename
+                }
+                
+                # 根据识别的列映射填充数据
+                for target_field, source_columns in column_mapping.items():
+                    for col in source_columns:
+                        if col in df.columns and pd.notna(row[col]) and str(row[col]).strip():
+                            item[target_field] = str(row[col]).strip()
+                            break
+                
+                # 将客户名称（店名）移动到客户备注字段
+                if item['客户名称']:
+                    item['客户备注'] = item['客户名称']
+                    item['客户名称'] = ''  # 清空客户名称字段
+                
+                # 只有当至少有收货人或电话不为空时才添加数据
+                if item['收货人'] or item['手机']:
+                    extracted_data.append(item)
+                    
+            except Exception as e:
+                st.warning(f"处理第 {index+1} 行时出错: {e}")
+        
+        return extracted_data
+        
+    except Exception as e:
+        st.error(f"智能处理文件 {filename} 时出错: {e}")
+        return []
 
 # 设置页面配置
 st.set_page_config(
@@ -283,69 +347,87 @@ def mark_procurement_info(发货明细_df, 供应商订单_df):
 
 def extract_direct_mail_info(df, filename):
     """
-    从直邮明细文件中提取姓名、联系方式、收货地址等信息
+    智能识别直邮表中的关键列并提取数据
+    识别规则：
+    - 手机号：包含7-11位数字的列
+    - 收货人：大部分是2-4个汉字的列
+    - 地址：包含较长文本的列
+    - 店名：商户/店铺名称列
     """
     try:
-        extracted_data = []
+        # 1. 识别关键列
+        phone_col = None
+        name_col = None
+        address_col = None
+        shop_col = None
         
-        # 根据文件名确定市场类型
-        market = ""
-        if "兰州" in filename:
-            market = "兰州市场"
-        elif "酒泉" in filename:
-            market = "酒泉市场"
-        
-        # 遍历数据行并提取信息（从第二行开始，因为第一行是标题）
-        for index, row in df.iterrows():
-            try:
-                # 跳过标题行
-                if index == 0:
+        # 分析各列数据特征
+        for col in df.columns:
+            col_data = df[col].dropna().astype(str)
+            if len(col_data) == 0:
+                continue
+                
+            # 识别手机号列（包含7-11位数字）
+            if not phone_col:
+                digit_counts = col_data.str.replace(r'\D', '', regex=True).str.len()
+                if (digit_counts >= 7).mean() > 0.8:  # 80%以上是7位以上数字
+                    phone_col = col
                     continue
                     
-                # 根据不同市场的文件结构处理数据
-                if market == "兰州市场":
-                    # 兰州市场文件结构: 
-                    # 第一列: 序号
-                    # 第二列 (Unnamed: 1): 客户名称
-                    # 第三列 (Unnamed: 2): 地址
-                    # 第四列 (Unnamed: 3): 联系人姓名
-                    # 第五列 (Unnamed: 4): 电话
-                    item = {
-                        '客户名称': row.get('Unnamed: 1', ''),
-                        '收货地址': row.get('Unnamed: 2', ''),
-                        '收货人': row.get('Unnamed: 3', ''),
-                        '手机': str(row.get('Unnamed: 4', '')),
-                        '源文件': filename
-                    }
-                elif market == "酒泉市场":
-                    # 酒泉市场文件结构: 序号, 区域, NaN, NaN, 电话, 详细邮寄地址, 访销周期
-                    item = {
-                        '客户名称': '',  # 酒泉市场文件中没有明确的客户名称列
-                        '收货地址': row.get('Unnamed: 6', ''),  # 详细邮寄地址在第七列
-                        '收货人': '',   # 酒泉市场文件中没有明确的收货人列
-                        '手机': str(row.get('Unnamed: 5', '')),      # 电话在第六列
-                        '源文件': filename
-                    }
-                else:
-                    # 默认处理方式
-                    item = {
-                        '客户名称': row.get('客户名称', row.get('Unnamed: 1', '')),
-                        '收货地址': row.get('地址', row.get('Unnamed: 2', '')),
-                        '收货人': row.get('联系人姓名', row.get('Unnamed: 3', '')),
-                        '手机': str(row.get('电话', row.get('Unnamed: 4', ''))),
-                        '源文件': filename
-                    }
+            # 识别收货人列（大部分是2-4个汉字）
+            if not name_col:
+                name_lengths = col_data.str.len()
+                chinese_chars = col_data.str.count(r'[\u4e00-\u9fa5]')
+                if ((name_lengths >= 2) & (name_lengths <= 4)).mean() > 0.7 and (chinese_chars == name_lengths).mean() > 0.7:
+                    name_col = col
+                    continue
+                    
+            # 识别地址列（较长文本）
+            if not address_col:
+                if (col_data.str.len() > 10).mean() > 0.7:
+                    address_col = col
+                    continue
+                    
+            # 识别店名列（非人名、非地址的文本）
+            if not shop_col:
+                if (col_data.str.len() > 2).mean() > 0.7 and (col_data != df.get(phone_col, '')).all() and (col_data != df.get(name_col, '')).all():
+                    shop_col = col
+        
+        # 显示识别结果
+        st.write(f"识别结果: 手机→{phone_col}, 收货人→{name_col}, 地址→{address_col}, 店名→{shop_col}")
+        
+        # 2. 提取数据（跳过第一行）
+        extracted_data = []
+        for index, row in df.iloc[1:].iterrows():
+            item = {
+                '收货人': str(row.get(name_col, '')).strip() if name_col else '',
+                '手机': str(row.get(phone_col, '')).strip() if phone_col else '',
+                '收货地址': str(row.get(address_col, '')).strip() if address_col else '',
+                '客户备注': str(row.get(shop_col, '')).strip() if shop_col else '',
+                '源文件': filename
+            }
+            
+            # 验证数据有效性
+            if not item['收货人'] and not item['手机']:
+                continue
                 
-                # 只有当收货人不为空时才添加数据
-                if item['收货人'].strip() != '':
-                    extracted_data.append(item)
-            except Exception as e:
-                st.warning(f"处理第 {index+1} 行时出错: {e}")
+            # 确保手机号只包含数字
+            if item['手机']:
+                item['手机'] = ''.join(c for c in item['手机'] if c.isdigit())[:11]
+                
+            extracted_data.append(item)
+        
+        # 显示提取结果示例
+        if extracted_data:
+            st.write("提取数据示例:")
+            st.dataframe(pd.DataFrame(extracted_data[:3]))
         
         return extracted_data
         
     except Exception as e:
-        st.error(f"处理直邮明细文件 {filename} 时出错: {e}")
+        st.error(f"处理文件 {filename} 时出错: {str(e)}")
+        import traceback
+        st.error(traceback.format_exc())
         return []
 
 if app_mode == "批量处理发放明细":
@@ -601,115 +683,192 @@ elif app_mode == "标记发货明细集采信息":
 
 elif app_mode == "导入直邮明细到三择导单":
     st.header("导入直邮明细到三择导单")
-    st.info("此功能用于将直邮明细表中的姓名、联系方式、收货地址导入到三择导单中")
+    st.info("请按步骤操作：1.上传三择导单 2.上传直邮文件并选择列映射")
     
-    # 文件上传
-    sanze_file = st.file_uploader("上传三择导单文件", type=["xlsx"], key="sanze_file")
-    direct_mail_files = st.file_uploader(
-        "上传直邮明细文件（支持多个文件）",
-        type=["xlsx"],
-        accept_multiple_files=True,
-        key="direct_mail_files"
-    )
+    # 商品列表
+    product_list = [
+        "奥克斯（AUX） 除螨仪 90W （计价单位：台） 国产定制",
+        "黄金葉  盒装抽纸  （计价单位：盒） 国产定制",
+        "黄金葉 环保塑料袋  50个/捆 300个/箱 （计价单位：个） 国产定制",
+        "黄金葉 两盒装翻盖式礼盒 30个/箱 （计价单位：个） 国产定制",
+        "黄金葉 湿纸巾 10片/包 （计价单位：包） 国产定制",
+        "黄金葉 四盒装翻盖式礼盒 30个/箱 （计价单位：个） 国产定制",
+        "黄金葉 四盒装简易封套（天叶品系） 50个/箱 （计价单位：个） 国产定制",
+        "黄金葉 天叶叁毫克   两条装纸袋 （计价单位：个） 国产定制",
+        "黄金葉 五盒装简易封套（常规款） 50个/箱 （计价单位：个） 国产定制",
+        "黄金葉 五盒装简易封套（细支款） 50个/箱 （计价单位：个） 国产定制",
+        "黄金葉 五盒装简易封套（中支款） 50个/箱 （计价单位：个） 国产定制",
+        "品胜（PISEN） 数据线三合一充电线100W  一拖三 （计价单位：条） 有色",
+        "剃须刀便携合金电动刮胡刀男士  MINI 2.0 （计价单位：个） 颜色随机"
+    ]
     
-    if sanze_file and direct_mail_files:
-        st.info(f"已选择 {len(direct_mail_files)} 个直邮明细文件")
-        
-        # 显示上传的文件名
-        file_names = [f.name for f in direct_mail_files]
-        st.write("上传的直邮明细文件:")
-        st.write(file_names)
-        
-        # 处理按钮
-        if st.button("开始导入"):
-            with st.spinner("正在处理文件..."):
+    # 初始化session state
+    if 'processed_data_list' not in st.session_state:
+        st.session_state.processed_data_list = []
+    if 'show_import_success' not in st.session_state:
+        st.session_state.show_import_success = False
+    if 'selected_product' not in st.session_state:
+        st.session_state.selected_product = ""
+    if 'product_quantity' not in st.session_state:
+        st.session_state.product_quantity = 1
+    if 'download_triggered' not in st.session_state:
+        st.session_state.download_triggered = False
+    
+    # 步骤1：上传三择导单
+    sanze_file = st.file_uploader("1. 上传三择导单文件", type=["xlsx"], key="sanze_file")
+    
+    if sanze_file:
+        try:
+            # 创建临时文件以确保可写权限
+            with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp_file:
+                tmp_file.write(sanze_file.getvalue())
+                tmp_file_path = tmp_file.name
+            
+            # 从临时文件读取三择导单
+            sanze_df = pd.read_excel(tmp_file_path)
+            st.success(f"三择导单已加载（共{len(sanze_df)}行）")
+            
+            # 确保有客户备注列和货品名称、数量列
+            if '客户备注' not in sanze_df.columns:
+                sanze_df['客户备注'] = ''
+            if '货品名称' not in sanze_df.columns:
+                sanze_df['货品名称'] = ''
+            if '数量' not in sanze_df.columns:
+                sanze_df['数量'] = ''
+            
+            # 步骤2：处理直邮文件
+            st.subheader("2. 处理直邮明细文件")
+            uploaded_file = st.file_uploader(
+                "上传直邮明细文件", 
+                type=["xlsx"],
+                key="direct_mail_current"
+            )
+            
+            # 商品选择界面（只能选择一个商品）
+            st.subheader("3. 选择商品和数量")
+            selected_product = st.selectbox("选择商品", [""] + product_list, 
+                                          index=product_list.index(st.session_state.selected_product) + 1 
+                                          if st.session_state.selected_product in product_list else 0,
+                                          key="product_selector")
+            st.session_state.selected_product = selected_product
+            
+            product_quantity = st.number_input("数量", min_value=1, value=st.session_state.product_quantity, key="quantity_selector")
+            st.session_state.product_quantity = product_quantity
+            
+            if uploaded_file:
                 try:
-                    # 保存上传的文件到临时目录
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        # 保存三择导单文件
-                        sanze_path = os.path.join(temp_dir, sanze_file.name)
-                        with open(sanze_path, "wb") as f:
-                            f.write(sanze_file.getbuffer())
+                    # 正确读取直邮文件，第二行作为列名
+                    df = pd.read_excel(uploaded_file, header=1)
+                    st.subheader(f"当前文件: {uploaded_file.name}")
+                    st.dataframe(df.head(5))
+                    
+                    # 列选择界面
+                    st.subheader("请选择对应列")
+                    cols = st.columns(2)
+                    with cols[0]:
+                        name_col = st.selectbox("收货人列", df.columns, key="name_col")
+                        phone_col = st.selectbox("电话列", df.columns, key="phone_col")
+                    with cols[1]:
+                        address_col = st.selectbox("地址列", df.columns, key="address_col")
+                        shop_col = st.selectbox("店名列", df.columns, key="shop_col")
+                    
+                    # 处理按钮
+                    if st.button("处理当前文件"):
+                        processed = []
+                        for _, row in df.iterrows():
+                            item = {
+                                '收货人': str(row[name_col]).strip() if pd.notna(row[name_col]) else '',
+                                '手机': str(row[phone_col]).strip() if pd.notna(row[phone_col]) else '',
+                                '收货地址': str(row[address_col]).strip() if pd.notna(row[address_col]) else '',
+                                '客户备注': str(row[shop_col]).strip() if pd.notna(row[shop_col]) else '',
+                                '商品名称': st.session_state.selected_product,
+                                '商品数量': st.session_state.product_quantity
+                            }
+                            if item['收货人'] or item['手机']:
+                                processed.append(item)
                         
-                        # 读取三择导单
-                        sanze_df = pd.read_excel(sanze_path)
-                        st.info(f"读取三择导单文件，共 {len(sanze_df)} 行数据")
+                        # 将当前处理的文件数据添加到列表中
+                        st.session_state.processed_data_list.append({
+                            'filename': uploaded_file.name,
+                            'data': processed
+                        })
+                        st.session_state.show_import_success = False
+                        st.session_state.download_triggered = False
+                        st.success(f"成功处理{len(processed)}行数据")
                         
-                        # 保存直邮明细文件
-                        direct_mail_paths = []
-                        for uploaded_file in direct_mail_files:
-                            file_path = os.path.join(temp_dir, uploaded_file.name)
-                            with open(file_path, "wb") as f:
-                                f.write(uploaded_file.getbuffer())
-                            direct_mail_paths.append(file_path)
+                        # 创建一个安全的DataFrame用于显示
+                        display_data = []
+                        for item in processed[:10]:  # 只显示前10行
+                            display_item = {
+                                '收货人': item['收货人'],
+                                '手机': item['手机'],
+                                '收货地址': item['收货地址'],
+                                '客户备注': item['客户备注'],
+                                '商品名称': item['商品名称'],
+                                '商品数量': item['商品数量']
+                            }
+                            display_data.append(display_item)
                         
-                        # 处理所有直邮明细文件
-                        all_direct_mail_data = []
-                        for i, file_path in enumerate(direct_mail_paths):
-                            with st.spinner(f"正在处理 {os.path.basename(file_path)}..."):
-                                try:
-                                    # 读取直邮明细文件
-                                    direct_mail_df = pd.read_excel(file_path)
-                                    st.success(f"成功读取 {os.path.basename(file_path)}，共 {len(direct_mail_df)} 行数据")
-                                    
-                                    # 处理直邮明细数据，提取需要的列
-                                    processed_data = extract_direct_mail_info(direct_mail_df, os.path.basename(file_path))
-                                    if processed_data:
-                                        all_direct_mail_data.extend(processed_data)
-                                        st.success(f"成功处理 {os.path.basename(file_path)}，提取到 {len(processed_data)} 行数据")
-                                except Exception as e:
-                                    st.error(f"处理文件 {os.path.basename(file_path)} 时出错: {e}")
+                        display_df = pd.DataFrame(display_data)
+                        # 确保所有列都是字符串类型，避免PyArrow错误
+                        for col in display_df.columns:
+                            display_df[col] = display_df[col].astype(str)
+                        st.dataframe(display_df)
+                    
+                    # 显示已处理的文件列表和导入按钮
+                    if st.session_state.processed_data_list:
+                        st.subheader("已处理的文件列表")
+                        for i, item in enumerate(st.session_state.processed_data_list):
+                            st.write(f"{i+1}. {item['filename']} ({len(item['data'])} 行数据)")
                         
-                        # 将处理后的数据添加到三择导单
-                        if all_direct_mail_data:
-                            st.success(f"总共提取了 {len(all_direct_mail_data)} 行直邮数据")
+                        # 添加到三择导单按钮放在已处理文件列表下方
+                        if st.button("确认导入到三择导单"):
+                            total_imported = 0
+                            for processed_item in st.session_state.processed_data_list:
+                                processed_data = processed_item['data']
+                                for item in processed_data:
+                                    new_row = {col: '' for col in sanze_df.columns}
+                                    new_row.update({
+                                        '收货人': item['收货人'],
+                                        '手机': item['手机'],
+                                        '收货地址': item['收货地址'],
+                                        '客户备注': item['客户备注'],
+                                        '货品名称': item['商品名称'],
+                                        '数量': item['商品数量']
+                                    })
+                                    sanze_df.loc[len(sanze_df)] = new_row
+                                    total_imported += 1
                             
-                            # 创建新的数据行并添加到三择导单
-                            new_rows = []
-                            for item in all_direct_mail_data:
-                                # 创建一个新行，保持三择导单的列结构
-                                new_row = {}
-                                for col in sanze_df.columns:
-                                    new_row[col] = ''  # 默认为空字符串
-                                
-                                # 填充相关信息，确保正确导入收货人等关键字段
-                                new_row['收货人'] = item.get('收货人', '')
-                                new_row['手机'] = item.get('手机', '')
-                                new_row['收货地址'] = item.get('收货地址', '')
-                                new_row['客户名称'] = item.get('客户名称', '')
-                                
-                                new_rows.append(new_row)
-                            
-                            # 将新行转换为DataFrame并添加到三择导单
-                            if new_rows:
-                                new_rows_df = pd.DataFrame(new_rows)
-                                # 确保新行的列与三择导单一致
-                                new_rows_df = new_rows_df.reindex(columns=sanze_df.columns, fill_value='')
-                                # 合并到三择导单（添加到末尾）
-                                result_df = pd.concat([sanze_df, new_rows_df], ignore_index=True)
-                                
-                                st.success(f"导入完成，最终数据共 {len(result_df)} 行")
-                                
-                                # 显示结果预览（显示完整的三泽导单格式）
-                                st.subheader("导入结果预览")
-                                st.dataframe(result_df.tail(10))
-                                
-                                # 提供下载
-                                output_file = f"三择导单_导入直邮明细_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                                result_df.to_excel(output_file, index=False)
-                                
-                                with open(output_file, "rb") as file:
-                                    st.download_button(
-                                        label="下载导入结果",
-                                        data=file,
-                                        file_name=output_file,
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                    )
-                        else:
-                            st.warning("没有成功提取任何直邮数据")
+                            st.session_state.show_import_success = True
+                            st.session_state.download_triggered = False
+                    
+                    if st.session_state.show_import_success:
+                        st.success(f"导入完成，三择导单现有{len(sanze_df)}行")
+                        
+                        # 下载更新后的文件，文件名精确到秒
+                        output = f"三择导单_更新_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                        sanze_df.to_excel(output, index=False)
+                        
+                        with open(output, "rb") as f:
+                            st.download_button("下载更新后的三择导单", f, file_name=output)
+                        
+                        # 导入完成后清空已处理数据列表
+                        if st.button("清空已处理文件列表并开始下一轮导入"):
+                            st.session_state.processed_data_list = []
+                            st.session_state.show_import_success = False
+                            st.session_state.selected_product = ""
+                            st.session_state.product_quantity = 1
+                            st.session_state.download_triggered = False
+                            st.rerun()
                             
                 except Exception as e:
-                    st.error(f"处理过程中出错: {e}")
+                    st.error(f"处理直邮文件时出错: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+        except Exception as e:
+            st.error(f"处理三择导单时出错: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
 
 # 页脚
 st.markdown("---")
