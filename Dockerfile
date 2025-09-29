@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com
 # 复制应用代码和配置
 COPY app.py .
 COPY .streamlit/config.toml .streamlit/config.toml
-
+COPY smart_column_functions.py ./
 # 暴露端口
 EXPOSE 8501
 

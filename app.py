@@ -85,7 +85,7 @@ st.markdown("---")
 st.sidebar.header("操作选项")
 app_mode = st.sidebar.selectbox(
     "选择功能",
-    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单"]
+    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP"]
 )
 
 def process_发放明细查询文件(file_path):
@@ -744,131 +744,249 @@ elif app_mode == "导入直邮明细到三择导单":
                 key="direct_mail_current"
             )
             
-            # 商品选择界面（只能选择一个商品）
-            st.subheader("3. 选择商品和数量")
-            selected_product = st.selectbox("选择商品", [""] + product_list, 
-                                          index=product_list.index(st.session_state.selected_product) + 1 
-                                          if st.session_state.selected_product in product_list else 0,
-                                          key="product_selector")
-            st.session_state.selected_product = selected_product
-            
-            product_quantity = st.number_input("数量", min_value=1, value=st.session_state.product_quantity, key="quantity_selector")
-            st.session_state.product_quantity = product_quantity
-            
             if uploaded_file:
-                try:
-                    # 正确读取直邮文件，第二行作为列名
-                    df = pd.read_excel(uploaded_file, header=1)
-                    st.subheader(f"当前文件: {uploaded_file.name}")
-                    st.dataframe(df.head(5))
+                # 添加列名行选择功能
+                st.subheader("3. 选择列名所在行")
+                header_option = st.radio(
+                    "请选择列名所在的行（查看下面的预览来确定）",
+                    options=[0, 1],
+                    format_func=lambda x: f"第{x+1}行",
+                    key="header_option"
+                )
+                
+                # 读取前3行数据用于预览
+                preview_df = pd.read_excel(uploaded_file, header=None, nrows=3)
+                st.write("前三行数据预览（用于确定列名所在行）:")
+                st.dataframe(preview_df)
+                
+                # 根据用户选择的列名行重新读取数据
+                df = pd.read_excel(uploaded_file, header=header_option)
+                
+                st.write(f"使用第{header_option+1}行作为列名后的数据预览:")
+                st.dataframe(df.head(5))
+                
+                # 商品选择界面（只能选择一个商品）
+                st.subheader("4. 选择商品和数量")
+                selected_product = st.selectbox("选择商品", [""] + product_list, 
+                                              index=product_list.index(st.session_state.selected_product) + 1 
+                                              if st.session_state.selected_product in product_list else 0,
+                                              key="product_selector")
+                st.session_state.selected_product = selected_product
+                
+                product_quantity = st.number_input("数量", min_value=1, value=st.session_state.product_quantity, key="quantity_selector")
+                st.session_state.product_quantity = product_quantity
+                
+                # 列选择界面
+                st.subheader("5. 请选择对应列")
+                cols = st.columns(2)
+                with cols[0]:
+                    name_col = st.selectbox("收货人列", df.columns, key="name_col")
+                    phone_col = st.selectbox("电话列", df.columns, key="phone_col")
+                with cols[1]:
+                    address_col = st.selectbox("地址列", df.columns, key="address_col")
+                    shop_col = st.selectbox("店名列", df.columns, key="shop_col")
+                
+                # 处理按钮
+                if st.button("处理当前文件"):
+                    processed = []
+                    for _, row in df.iterrows():
+                        item = {
+                            '收货人': str(row[name_col]).strip() if pd.notna(row[name_col]) else '',
+                            '手机': str(row[phone_col]).strip() if pd.notna(row[phone_col]) else '',
+                            '收货地址': str(row[address_col]).strip() if pd.notna(row[address_col]) else '',
+                            '客户备注': str(row[shop_col]).strip() if pd.notna(row[shop_col]) else '',
+                            '商品名称': st.session_state.selected_product,
+                            '商品数量': st.session_state.product_quantity
+                        }
+                        if item['收货人'] or item['手机']:
+                            processed.append(item)
                     
-                    # 列选择界面
-                    st.subheader("请选择对应列")
-                    cols = st.columns(2)
-                    with cols[0]:
-                        name_col = st.selectbox("收货人列", df.columns, key="name_col")
-                        phone_col = st.selectbox("电话列", df.columns, key="phone_col")
-                    with cols[1]:
-                        address_col = st.selectbox("地址列", df.columns, key="address_col")
-                        shop_col = st.selectbox("店名列", df.columns, key="shop_col")
+                    # 将当前处理的文件数据添加到列表中
+                    st.session_state.processed_data_list.append({
+                        'filename': uploaded_file.name,
+                        'data': processed
+                    })
+                    st.session_state.show_import_success = False
+                    st.session_state.download_triggered = False
+                    st.success(f"成功处理{len(processed)}行数据")
                     
-                    # 处理按钮
-                    if st.button("处理当前文件"):
-                        processed = []
-                        for _, row in df.iterrows():
-                            item = {
-                                '收货人': str(row[name_col]).strip() if pd.notna(row[name_col]) else '',
-                                '手机': str(row[phone_col]).strip() if pd.notna(row[phone_col]) else '',
-                                '收货地址': str(row[address_col]).strip() if pd.notna(row[address_col]) else '',
-                                '客户备注': str(row[shop_col]).strip() if pd.notna(row[shop_col]) else '',
-                                '商品名称': st.session_state.selected_product,
-                                '商品数量': st.session_state.product_quantity
-                            }
-                            if item['收货人'] or item['手机']:
-                                processed.append(item)
+                    # 创建一个安全的DataFrame用于显示
+                    display_data = []
+                    for item in processed[:10]:  # 只显示前10行
+                        display_item = {
+                            '收货人': item['收货人'],
+                            '手机': item['手机'],
+                            '收货地址': item['收货地址'],
+                            '客户备注': item['客户备注'],
+                            '商品名称': item['商品名称'],
+                            '商品数量': item['商品数量']
+                        }
+                        display_data.append(display_item)
+                    
+                    display_df = pd.DataFrame(display_data)
+                    # 确保所有列都是字符串类型，避免PyArrow错误
+                    for col in display_df.columns:
+                        display_df[col] = display_df[col].astype(str)
+                    st.dataframe(display_df)
+                
+                # 显示已处理的文件列表和导入按钮
+                if st.session_state.processed_data_list:
+                    st.subheader("已处理的文件列表")
+                    for i, item in enumerate(st.session_state.processed_data_list):
+                        st.write(f"{i+1}. {item['filename']} ({len(item['data'])} 行数据)")
+                    
+                    # 添加到三择导单按钮放在已处理文件列表下方
+                    if st.button("确认导入到三择导单"):
+                        total_imported = 0
+                        for processed_item in st.session_state.processed_data_list:
+                            processed_data = processed_item['data']
+                            for item in processed_data:
+                                new_row = {col: '' for col in sanze_df.columns}
+                                new_row.update({
+                                    '收货人': item['收货人'],
+                                    '手机': item['手机'],
+                                    '收货地址': item['收货地址'],
+                                    '客户备注': item['客户备注'],
+                                    '货品名称': item['商品名称'],
+                                    '数量': item['商品数量']
+                                })
+                                sanze_df.loc[len(sanze_df)] = new_row
+                                total_imported += 1
                         
-                        # 将当前处理的文件数据添加到列表中
-                        st.session_state.processed_data_list.append({
-                            'filename': uploaded_file.name,
-                            'data': processed
-                        })
-                        st.session_state.show_import_success = False
+                        st.session_state.show_import_success = True
                         st.session_state.download_triggered = False
-                        st.success(f"成功处理{len(processed)}行数据")
-                        
-                        # 创建一个安全的DataFrame用于显示
-                        display_data = []
-                        for item in processed[:10]:  # 只显示前10行
-                            display_item = {
-                                '收货人': item['收货人'],
-                                '手机': item['手机'],
-                                '收货地址': item['收货地址'],
-                                '客户备注': item['客户备注'],
-                                '商品名称': item['商品名称'],
-                                '商品数量': item['商品数量']
-                            }
-                            display_data.append(display_item)
-                        
-                        display_df = pd.DataFrame(display_data)
-                        # 确保所有列都是字符串类型，避免PyArrow错误
-                        for col in display_df.columns:
-                            display_df[col] = display_df[col].astype(str)
-                        st.dataframe(display_df)
+                
+                if st.session_state.show_import_success:
+                    st.success(f"导入完成，三择导单现有{len(sanze_df)}行")
                     
-                    # 显示已处理的文件列表和导入按钮
-                    if st.session_state.processed_data_list:
-                        st.subheader("已处理的文件列表")
-                        for i, item in enumerate(st.session_state.processed_data_list):
-                            st.write(f"{i+1}. {item['filename']} ({len(item['data'])} 行数据)")
-                        
-                        # 添加到三择导单按钮放在已处理文件列表下方
-                        if st.button("确认导入到三择导单"):
-                            total_imported = 0
-                            for processed_item in st.session_state.processed_data_list:
-                                processed_data = processed_item['data']
-                                for item in processed_data:
-                                    new_row = {col: '' for col in sanze_df.columns}
-                                    new_row.update({
-                                        '收货人': item['收货人'],
-                                        '手机': item['手机'],
-                                        '收货地址': item['收货地址'],
-                                        '客户备注': item['客户备注'],
-                                        '货品名称': item['商品名称'],
-                                        '数量': item['商品数量']
-                                    })
-                                    sanze_df.loc[len(sanze_df)] = new_row
-                                    total_imported += 1
-                            
-                            st.session_state.show_import_success = True
-                            st.session_state.download_triggered = False
+                    # 下载更新后的文件，文件名精确到秒
+                    output = f"三择导单_更新_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    sanze_df.to_excel(output, index=False)
                     
-                    if st.session_state.show_import_success:
-                        st.success(f"导入完成，三择导单现有{len(sanze_df)}行")
+                    with open(output, "rb") as f:
+                        st.download_button("下载更新后的三择导单", f, file_name=output)
+                    
+                    # 导入完成后清空已处理数据列表
+                    if st.button("清空已处理文件列表并开始下一轮导入"):
+                        st.session_state.processed_data_list = []
+                        st.session_state.show_import_success = False
+                        st.session_state.selected_product = ""
+                        st.session_state.product_quantity = 1
+                        st.session_state.download_triggered = False
+                        st.rerun()
                         
-                        # 下载更新后的文件，文件名精确到秒
-                        output = f"三择导单_更新_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                        sanze_df.to_excel(output, index=False)
-                        
-                        with open(output, "rb") as f:
-                            st.download_button("下载更新后的三择导单", f, file_name=output)
-                        
-                        # 导入完成后清空已处理数据列表
-                        if st.button("清空已处理文件列表并开始下一轮导入"):
-                            st.session_state.processed_data_list = []
-                            st.session_state.show_import_success = False
-                            st.session_state.selected_product = ""
-                            st.session_state.product_quantity = 1
-                            st.session_state.download_triggered = False
-                            st.rerun()
-                            
-                except Exception as e:
-                    st.error(f"处理直邮文件时出错: {str(e)}")
-                    import traceback
-                    st.error(traceback.format_exc())
         except Exception as e:
             st.error(f"处理三择导单时出错: {str(e)}")
             import traceback
             st.error(traceback.format_exc())
+
+# 添加新的功能模块
+elif app_mode == "增强版VLOOKUP":
+    st.header("增强版VLOOKUP")
+    st.info("此功能允许您从参考表中批量匹配多个列到主表中")
+    
+    # 初始化session state
+    if 'vlookup_processed' not in st.session_state:
+        st.session_state.vlookup_processed = False
+    if 'vlookup_result' not in st.session_state:
+        st.session_state.vlookup_result = None
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        main_file = st.file_uploader("上传主表文件", type=["xlsx"], key="main_file")
+    
+    with col2:
+        reference_file = st.file_uploader("上传参考表文件", type=["xlsx"], key="reference_file")
+    
+    if main_file and reference_file:
+        try:
+            # 读取两个文件
+            main_df = pd.read_excel(main_file)
+            reference_df = pd.read_excel(reference_file)
+            
+            # 确保所有列都是字符串类型，避免PyArrow错误
+            for col in main_df.columns:
+                main_df[col] = main_df[col].astype(str)
+                
+            for col in reference_df.columns:
+                reference_df[col] = reference_df[col].astype(str)
+            
+            st.subheader("主表数据预览")
+            st.dataframe(main_df.head(10))
+            
+            st.subheader("参考表数据预览")
+            st.dataframe(reference_df.head(10))
+            
+            # 选择匹配列
+            st.subheader("配置匹配参数")
+            
+            # 获取所有列名
+            main_columns = main_df.columns.tolist()
+            reference_columns = reference_df.columns.tolist()
+            
+            # 选择用于匹配的列
+            st.write("选择用于匹配的列:")
+            match_col_main = st.selectbox("主表中的匹配列", main_columns, key="match_col_main")
+            match_col_ref = st.selectbox("参考表中的匹配列", reference_columns, key="match_col_ref")
+            
+            # 选择要从参考表添加的列
+            st.write("选择要从参考表添加到主表的列:")
+            columns_to_add = st.multiselect("选择列", reference_columns, key="columns_to_add")
+            
+            # 选择匹配方式
+            st.write("匹配方式:")
+            join_type = st.radio("选择连接方式", 
+                                ["LEFT JOIN (保留主表所有行)", 
+                                 "INNER JOIN (只保留两表匹配的行)"], 
+                                key="join_type")
+            
+            if st.button("执行增强VLOOKUP"):
+                if columns_to_add:
+                    with st.spinner("正在执行增强VLOOKUP..."):
+                        try:
+                            # 执行增强版VLOOKUP
+                            if join_type == "LEFT JOIN (保留主表所有行)":
+                                result_df = pd.merge(main_df, 
+                                                   reference_df[[match_col_ref] + columns_to_add], 
+                                                   left_on=match_col_main, 
+                                                   right_on=match_col_ref, 
+                                                   how='left')
+                            else:
+                                result_df = pd.merge(main_df, 
+                                                   reference_df[[match_col_ref] + columns_to_add], 
+                                                   left_on=match_col_main, 
+                                                   right_on=match_col_ref, 
+                                                   how='inner')
+                            
+                            # 确保结果DataFrame的所有列都是字符串类型
+                            for col in result_df.columns:
+                                result_df[col] = result_df[col].astype(str)
+                            
+                            st.session_state.vlookup_result = result_df
+                            st.session_state.vlookup_processed = True
+                            
+                            st.success("增强VLOOKUP执行完成！")
+                            st.subheader("结果预览")
+                            st.dataframe(result_df.head(20))
+                            
+                            # 提供下载
+                            output_file = f"增强VLOOKUP结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            result_df.to_excel(output_file, index=False)
+                            
+                            with open(output_file, "rb") as file:
+                                st.download_button(
+                                    label="下载结果文件",
+                                    data=file,
+                                    file_name=output_file,
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
+                        except Exception as e:
+                            st.error(f"执行过程中出现错误: {str(e)}")
+                else:
+                    st.warning("请至少选择一列添加到主表中")
+        except Exception as e:
+            st.error(f"文件读取或处理过程中出现错误: {str(e)}")
 
 # 页脚
 st.markdown("---")
