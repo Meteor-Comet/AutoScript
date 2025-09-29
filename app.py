@@ -1208,6 +1208,10 @@ elif app_mode == "物流单号匹配":
                             else:
                                 logistics_df_unique = logistics_df
                             
+                            # 数据预处理：去除收货人姓名中的多余空格（包括前导、尾随和中间的多余空格）
+                            pending_shipment_df[pending_name_select] = pending_shipment_df[pending_name_select].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+                            logistics_df_unique[logistics_name_select] = logistics_df_unique[logistics_name_select].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
+                            
                             # 为了避免重复列名，我们先从主表中移除与物流表同名的列（除了匹配键）
                             pending_shipment_for_merge = pending_shipment_df.copy()
                             columns_to_drop = []
