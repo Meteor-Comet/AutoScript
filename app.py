@@ -85,7 +85,7 @@ st.markdown("---")
 st.sidebar.header("操作选项")
 app_mode = st.sidebar.selectbox(
     "选择功能",
-    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP"]
+    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP", "物流单号匹配"]
 )
 
 def process_发放明细查询文件(file_path):
@@ -925,68 +925,380 @@ elif app_mode == "增强版VLOOKUP":
             main_columns = main_df.columns.tolist()
             reference_columns = reference_df.columns.tolist()
             
-            # 选择用于匹配的列
-            st.write("选择用于匹配的列:")
-            match_col_main = st.selectbox("主表中的匹配列", main_columns, key="match_col_main")
-            match_col_ref = st.selectbox("参考表中的匹配列", reference_columns, key="match_col_ref")
+            # 选择用于匹配的列（支持多选）
+            st.write("选择用于匹配的列（支持多列组合匹配）:")
+            match_cols_main = st.multiselect("主表中的匹配列", main_columns, key="match_cols_main", max_selections=len(main_columns))
+            match_cols_ref = st.multiselect("参考表中的匹配列（请按与主表相同的顺序选择）", reference_columns, key="match_cols_ref", max_selections=len(reference_columns))
             
-            # 选择要从参考表添加的列
-            st.write("选择要从参考表添加到主表的列:")
-            columns_to_add = st.multiselect("选择列", reference_columns, key="columns_to_add")
+            # 验证匹配列选择
+            if len(match_cols_main) != len(match_cols_ref):
+                st.warning("主表和参考表的匹配列数量必须相同")
+            elif len(match_cols_main) == 0:
+                st.warning("请至少选择一列用于匹配")
+            else:
+                # 显示匹配列对应关系
+                st.write("匹配列对应关系:")
+                match_df = pd.DataFrame({
+                    '主表列名': match_cols_main,
+                    '参考表列名': match_cols_ref
+                })
+                st.table(match_df)
+                
+                # 选择要从参考表添加的列
+                st.write("选择要从参考表添加到主表的列:")
+                # 排除已用于匹配的列
+                available_columns = [col for col in reference_columns if col not in match_cols_ref]
+                columns_to_add = st.multiselect("选择列", available_columns, key="columns_to_add")
+                
+                # 选择匹配方式
+                st.write("匹配方式:")
+                join_type = st.radio("选择连接方式", 
+                                    ["LEFT JOIN (保留主表所有行)", 
+                                     "INNER JOIN (只保留两表匹配的行)"], 
+                                    key="join_type")
+                
+                # 处理重复项选项
+                st.subheader("重复项处理")
+                handle_duplicates = st.radio(
+                    "如何处理参考表中的重复匹配记录",
+                    ["保留第一条记录", "合并所有记录（可能导致行数增加）"],
+                    index=0,
+                    key="vlookup_handle_duplicates"
+                )
+                
+                if st.button("执行增强VLOOKUP"):
+                    if columns_to_add:
+                        with st.spinner("正在执行增强VLOOKUP..."):
+                            try:
+                                # 处理参考表中的重复记录
+                                if handle_duplicates == "保留第一条记录":
+                                    # 对于每个匹配键，只保留第一条记录
+                                    reference_df_unique = reference_df.drop_duplicates(subset=match_cols_ref, keep='first')
+                                    st.info(f"参考表中重复的匹配记录已被移除，剩余 {len(reference_df_unique)} 条记录")
+                                else:
+                                    reference_df_unique = reference_df
+                                    st.info(f"保留参考表中的所有记录，共 {len(reference_df_unique)} 条记录")
+                                
+                                # 保存主表的原始索引
+                                main_df_with_index = main_df.reset_index()
+                                
+                                # 执行增强版VLOOKUP
+                                if join_type == "LEFT JOIN (保留主表所有行)":
+                                    # 使用left join确保保留主表的所有行和顺序
+                                    merged_temp = pd.merge(main_df_with_index, 
+                                                         reference_df_unique[match_cols_ref + columns_to_add], 
+                                                         left_on=match_cols_main, 
+                                                         right_on=match_cols_ref, 
+                                                         how='left',
+                                                         sort=False)  # 保持原有顺序
+                                else:
+                                    # INNER JOIN
+                                    merged_temp = pd.merge(main_df_with_index, 
+                                                         reference_df_unique[match_cols_ref + columns_to_add], 
+                                                         left_on=match_cols_main, 
+                                                         right_on=match_cols_ref, 
+                                                         how='inner',
+                                                         sort=False)  # 保持原有顺序
+                                
+                                # 恢复原始索引并排序，确保行顺序与主表一致
+                                result_df = merged_temp.sort_values('index').drop('index', axis=1).reset_index(drop=True)
+                                
+                                # 确保结果DataFrame的所有列都是字符串类型
+                                for col in result_df.columns:
+                                    result_df[col] = result_df[col].astype(str)
+                                
+                                st.success("增强VLOOKUP执行完成！")
+                                st.subheader("结果统计")
+                                st.write(f"原始主表行数: {len(main_df)}")
+                                st.write(f"匹配后结果行数: {len(result_df)}")
+                                
+                                if len(result_df) > len(main_df):
+                                    st.warning("注意：结果行数增加，这是因为某些记录在参考表中有多条匹配记录")
+                                
+                                st.subheader("结果预览")
+                                st.dataframe(result_df.head(20))
+                                
+                                # 提供下载
+                                output_file = f"增强VLOOKUP结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                                result_df.to_excel(output_file, index=False)
+                                
+                                with open(output_file, "rb") as file:
+                                    st.download_button(
+                                        label="下载结果文件",
+                                        data=file,
+                                        file_name=output_file,
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    )
+                            except Exception as e:
+                                st.error(f"执行过程中出现错误: {str(e)}")
+                                import traceback
+                                st.error(traceback.format_exc())
+                    else:
+                        st.warning("请至少选择一列添加到主表中")
+        except Exception as e:
+            st.error(f"文件读取或处理过程中出现错误: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+
+elif app_mode == "物流单号匹配":
+    st.header("物流单号匹配")
+    st.info("此功能用于将物流单号表中的快递公司、单号和额外单号信息匹配到待发货明细表中")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        pending_shipment_file = st.file_uploader("上传待发货明细表", type=["xlsx"], key="pending_shipment_file")
+    
+    with col2:
+        logistics_file = st.file_uploader("上传物流单号表", type=["xlsx"], key="logistics_file")
+    
+    if pending_shipment_file and logistics_file:
+        try:
+            # 读取两个文件
+            pending_shipment_df = pd.read_excel(pending_shipment_file)
+            logistics_df = pd.read_excel(logistics_file)
             
-            # 选择匹配方式
-            st.write("匹配方式:")
-            join_type = st.radio("选择连接方式", 
-                                ["LEFT JOIN (保留主表所有行)", 
-                                 "INNER JOIN (只保留两表匹配的行)"], 
-                                key="join_type")
+            # 确保所有列都是字符串类型，避免PyArrow错误
+            for col in pending_shipment_df.columns:
+                pending_shipment_df[col] = pending_shipment_df[col].astype(str)
+                
+            for col in logistics_df.columns:
+                logistics_df[col] = logistics_df[col].astype(str)
             
-            if st.button("执行增强VLOOKUP"):
+            st.subheader("待发货明细表数据预览")
+            st.dataframe(pending_shipment_df.head(10))
+            
+            st.subheader("物流单号表数据预览")
+            st.dataframe(logistics_df.head(10))
+            
+            # 显示列名
+            st.subheader("列名信息")
+            with st.expander("点击展开/收起列名详情"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("待发货明细表列名:")
+                    st.write(list(pending_shipment_df.columns))
+                with col2:
+                    st.write("物流单号表列名:")
+                    st.write(list(logistics_df.columns))
+            
+            # 自动匹配关键列
+            st.subheader("关键列匹配")
+            
+            # 定义可能的列名
+            pending_shipment_name_cols = ['收货人', '收件人', '客户名称', '姓名']
+            logistics_name_cols = ['收件人', '收货人', '客户名称', '姓名']
+            
+            # 自动检测匹配列，优先选择"收货人"
+            pending_name_col = None
+            logistics_name_col = None
+            
+            # 优先检查"收货人"列
+            if '收货人' in pending_shipment_df.columns:
+                pending_name_col = '收货人'
+            else:
+                for col in pending_shipment_df.columns:
+                    if col in pending_shipment_name_cols:
+                        pending_name_col = col
+                        break
+            
+            if '收货人' in logistics_df.columns:
+                logistics_name_col = '收货人'
+            else:
+                for col in logistics_df.columns:
+                    if col in logistics_name_cols:
+                        logistics_name_col = col
+                        break
+            
+            # 显示检测到的列
+            st.write("自动检测到的匹配列:")
+            with st.expander("点击选择匹配列", expanded=True):
+                col1, col2 = st.columns(2)
+                with col1:
+                    pending_name_select = st.selectbox(
+                        "待发货明细表中的收件人列", 
+                        pending_shipment_df.columns, 
+                        index=pending_shipment_df.columns.tolist().index(pending_name_col) if pending_name_col else 0,
+                        key="pending_name_select"
+                    )
+                with col2:
+                    logistics_name_select = st.selectbox(
+                        "物流单号表中的收件人列", 
+                        logistics_df.columns, 
+                        index=logistics_df.columns.tolist().index(logistics_name_col) if logistics_name_col else 0,
+                        key="logistics_name_select"
+                    )
+            
+            # 选择要添加的列
+            st.subheader("选择要添加的列")
+            available_columns = [col for col in logistics_df.columns if col not in [logistics_name_select]]
+            
+            # 设置默认选中的列
+            default_columns = []
+            common_logistics_columns = ['物流公司', '物流单号', '额外物流单号']
+            for col in common_logistics_columns:
+                if col in available_columns:
+                    default_columns.append(col)
+            
+            with st.expander("点击选择要添加的列", expanded=True):
+                columns_to_add = st.multiselect(
+                    "选择要从物流单号表添加到待发货明细表的列",
+                    available_columns,
+                    default=default_columns,
+                    key="columns_to_add"
+                )
+                st.write("已选择要添加的列:", columns_to_add)
+            
+            # 处理重复项选项
+            st.subheader("重复项处理")
+            handle_duplicates = st.radio(
+                "如何处理物流单号表中的重复收件人记录",
+                ["保留第一条记录", "合并所有记录（可能导致行数增加）"],
+                index=0,
+                key="handle_duplicates"
+            )
+            
+            # 选择输出列
+            st.subheader("输出列选择")
+            with st.expander("点击选择输出列", expanded=True):
+                # 定义关键列
+                key_columns = ['收货人', '手机', '收货地址', '货品名称', '规格', '数量', '物流公司', '物流单号', '额外物流单号', '发货时间']
+                
+                # 合并后的所有可能列
+                all_possible_columns = list(pending_shipment_df.columns) + columns_to_add
+                
+                # 确保关键列优先显示
+                ordered_columns = []
+                # 先添加关键列中存在于数据中的列
+                for col in key_columns:
+                    if col in all_possible_columns and col not in ordered_columns:
+                        ordered_columns.append(col)
+                
+                # 再添加其他列
+                for col in all_possible_columns:
+                    if col not in ordered_columns:
+                        ordered_columns.append(col)
+                
+                # 默认选中所有关键列（如果存在）加上从物流表添加的列
+                default_output_columns = []
+                for col in key_columns:
+                    if col in all_possible_columns:
+                        default_output_columns.append(col)
+                
+                # 添加从物流单号表中选择的列（如果尚未包含）
+                for col in columns_to_add:
+                    if col not in default_output_columns:
+                        default_output_columns.append(col)
+                
+                output_columns = st.multiselect(
+                    "选择最终输出的列（可自定义）",
+                    ordered_columns,
+                    default=default_output_columns,
+                    key="output_columns"
+                )
+            
+            if st.button("执行匹配"):
                 if columns_to_add:
-                    with st.spinner("正在执行增强VLOOKUP..."):
+                    with st.spinner("正在执行匹配..."):
                         try:
-                            # 执行增强版VLOOKUP
-                            if join_type == "LEFT JOIN (保留主表所有行)":
-                                result_df = pd.merge(main_df, 
-                                                   reference_df[[match_col_ref] + columns_to_add], 
-                                                   left_on=match_col_main, 
-                                                   right_on=match_col_ref, 
-                                                   how='left')
+                            # 处理物流单号表中的重复记录
+                            if handle_duplicates == "保留第一条记录":
+                                # 对于每个收件人，只保留第一条记录
+                                logistics_df_unique = logistics_df.drop_duplicates(subset=[logistics_name_select], keep='first')
+                                st.info(f"物流单号表中重复的收件人记录已被移除，剩余 {len(logistics_df_unique)} 条记录")
                             else:
-                                result_df = pd.merge(main_df, 
-                                                   reference_df[[match_col_ref] + columns_to_add], 
-                                                   left_on=match_col_main, 
-                                                   right_on=match_col_ref, 
-                                                   how='inner')
+                                logistics_df_unique = logistics_df
+                                st.info(f"保留物流单号表中的所有记录，共 {len(logistics_df_unique)} 条记录")
+                            
+                            # 为了避免重复列名，我们先从主表中移除与物流表同名的列（除了匹配键）
+                            pending_shipment_for_merge = pending_shipment_df.copy()
+                            columns_to_drop = []
+                            for col in columns_to_add:
+                                if col in pending_shipment_for_merge.columns:
+                                    columns_to_drop.append(col)
+                            
+                            if columns_to_drop:
+                                pending_shipment_for_merge = pending_shipment_for_merge.drop(columns=columns_to_drop)
+                                st.write("从主表中移除的重复列:", columns_to_drop)
+                            
+                            # 使用收件人作为匹配键
+                            merge_columns = [logistics_name_select] + columns_to_add
+                            st.write("将从物流单号表添加的列:", merge_columns)
+                            
+                            result_df = pd.merge(
+                                pending_shipment_for_merge,
+                                logistics_df_unique[merge_columns],
+                                left_on=pending_name_select,
+                                right_on=logistics_name_select,
+                                how='left',
+                                sort=False
+                            )
                             
                             # 确保结果DataFrame的所有列都是字符串类型
                             for col in result_df.columns:
                                 result_df[col] = result_df[col].astype(str)
                             
-                            st.session_state.vlookup_result = result_df
-                            st.session_state.vlookup_processed = True
+                            # 显示匹配统计信息
+                            matched_count = 0
+                            if columns_to_add:
+                                # 检查第一列是否存在于结果中
+                                first_column = columns_to_add[0]
+                                if first_column in result_df.columns:
+                                    matched_count = result_df[first_column].notna().sum()
+                                else:
+                                    # 如果第一列不存在，检查其他列
+                                    for col in columns_to_add:
+                                        if col in result_df.columns:
+                                            matched_count = result_df[col].notna().sum()
+                                            break
+                            st.info(f"成功匹配 {matched_count} 条记录")
                             
-                            st.success("增强VLOOKUP执行完成！")
-                            st.subheader("结果预览")
+                            # 显示结果中的列信息
+                            st.write("合并后的列:", list(result_df.columns))
+                            
+                            # 只保留指定的输出列
+                            if output_columns:
+                                # 检查选定的列是否存在于结果中
+                                existing_output_columns = [col for col in output_columns if col in result_df.columns]
+                                # 显示将要保留的列
+                                st.write("将要保留的列:", existing_output_columns)
+                                result_df = result_df[existing_output_columns]
+                                st.write("实际保留的列:", list(result_df.columns))
+                            else:
+                                st.write("未指定输出列，保留所有列")
+                            
+                            st.success("匹配完成！")
+                            st.subheader("匹配结果统计")
+                            st.write(f"原始待发货明细表行数: {len(pending_shipment_df)}")
+                            st.write(f"匹配后结果行数: {len(result_df)}")
+                            
+                            if len(result_df) > len(pending_shipment_df):
+                                st.warning("注意：结果行数增加，这是因为某些收件人在物流单号表中有多条记录")
+                            
+                            st.subheader("匹配结果预览")
                             st.dataframe(result_df.head(20))
                             
                             # 提供下载
-                            output_file = f"增强VLOOKUP结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            output_file = f"发货明细_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
                             result_df.to_excel(output_file, index=False)
                             
                             with open(output_file, "rb") as file:
                                 st.download_button(
-                                    label="下载结果文件",
+                                    label="下载匹配结果",
                                     data=file,
                                     file_name=output_file,
                                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                 )
                         except Exception as e:
-                            st.error(f"执行过程中出现错误: {str(e)}")
+                            st.error(f"匹配过程中出现错误: {str(e)}")
+                            import traceback
+                            st.error(traceback.format_exc())
                 else:
-                    st.warning("请至少选择一列添加到主表中")
+                    st.warning("请至少选择一列添加到待发货明细表中")
         except Exception as e:
             st.error(f"文件读取或处理过程中出现错误: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
 
 # 页脚
 st.markdown("---")
