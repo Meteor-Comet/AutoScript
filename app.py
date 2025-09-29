@@ -85,7 +85,7 @@ st.markdown("---")
 st.sidebar.header("操作选项")
 app_mode = st.sidebar.selectbox(
     "选择功能",
-    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP", "物流单号匹配"]
+    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP", "物流单号匹配", "表合并"]
 )
 
 def process_发放明细查询文件(file_path):
@@ -1162,7 +1162,7 @@ elif app_mode == "物流单号匹配":
             st.subheader("输出列选择")
             with st.expander("点击选择输出列", expanded=True):
                 # 定义关键列
-                key_columns = ['收货人', '手机', '收货地址', '货品名称', '规格', '数量', '物流公司', '物流单号', '额外物流单号', '发货时间']
+                key_columns = ['网店订单号', '收货人', '手机', '收货地址', '货品名称', '规格', '数量', '物流公司', '物流单号', '额外物流单号', '发货时间']
                 
                 # 合并后的所有可能列
                 all_possible_columns = list(pending_shipment_df.columns) + columns_to_add
@@ -1205,10 +1205,8 @@ elif app_mode == "物流单号匹配":
                             if handle_duplicates == "保留第一条记录":
                                 # 对于每个收件人，只保留第一条记录
                                 logistics_df_unique = logistics_df.drop_duplicates(subset=[logistics_name_select], keep='first')
-                                st.info(f"物流单号表中重复的收件人记录已被移除，剩余 {len(logistics_df_unique)} 条记录")
                             else:
                                 logistics_df_unique = logistics_df
-                                st.info(f"保留物流单号表中的所有记录，共 {len(logistics_df_unique)} 条记录")
                             
                             # 为了避免重复列名，我们先从主表中移除与物流表同名的列（除了匹配键）
                             pending_shipment_for_merge = pending_shipment_df.copy()
@@ -1219,11 +1217,9 @@ elif app_mode == "物流单号匹配":
                             
                             if columns_to_drop:
                                 pending_shipment_for_merge = pending_shipment_for_merge.drop(columns=columns_to_drop)
-                                st.write("从主表中移除的重复列:", columns_to_drop)
                             
                             # 使用收件人作为匹配键
                             merge_columns = [logistics_name_select] + columns_to_add
-                            st.write("将从物流单号表添加的列:", merge_columns)
                             
                             result_df = pd.merge(
                                 pending_shipment_for_merge,
@@ -1253,19 +1249,11 @@ elif app_mode == "物流单号匹配":
                                             break
                             st.info(f"成功匹配 {matched_count} 条记录")
                             
-                            # 显示结果中的列信息
-                            st.write("合并后的列:", list(result_df.columns))
-                            
                             # 只保留指定的输出列
                             if output_columns:
                                 # 检查选定的列是否存在于结果中
                                 existing_output_columns = [col for col in output_columns if col in result_df.columns]
-                                # 显示将要保留的列
-                                st.write("将要保留的列:", existing_output_columns)
                                 result_df = result_df[existing_output_columns]
-                                st.write("实际保留的列:", list(result_df.columns))
-                            else:
-                                st.write("未指定输出列，保留所有列")
                             
                             st.success("匹配完成！")
                             st.subheader("匹配结果统计")
@@ -1299,6 +1287,186 @@ elif app_mode == "物流单号匹配":
             st.error(f"文件读取或处理过程中出现错误: {str(e)}")
             import traceback
             st.error(traceback.format_exc())
+
+elif app_mode == "表合并":
+    st.header("表合并")
+    st.info("此功能将纵向合并多个表格，并自动移除全空的列")
+    
+    # 文件上传
+    uploaded_files = st.file_uploader(
+        "上传需要合并的Excel文件（支持多个文件）",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="merge_files"
+    )
+    
+    if uploaded_files and len(uploaded_files) >= 2:
+        st.info(f"已选择 {len(uploaded_files)} 个文件")
+        
+        if st.button("执行合并"):
+            with st.spinner("正在执行合并..."):
+                try:
+                    # 读取所有文件
+                    dataframes = []
+                    for uploaded_file in uploaded_files:
+                        df = pd.read_excel(uploaded_file)
+                        # 确保所有列都是字符串类型，避免PyArrow错误
+                        for col in df.columns:
+                            df[col] = df[col].astype(str)
+                        dataframes.append(df)
+                    
+                    # 纵向合并所有表格
+                    result_df = pd.concat(dataframes, ignore_index=True)
+                    
+                    # 确保所有列都是字符串类型
+                    for col in result_df.columns:
+                        result_df[col] = result_df[col].astype(str)
+                    
+                    # 自动过滤全空的列
+                    columns_to_keep = []
+                    for col in result_df.columns:
+                        # 检查列是否全为空值（除了标题）
+                        non_empty_values = result_df[col][result_df[col].notna() & (result_df[col] != '') & (result_df[col] != 'nan')]
+                        if len(non_empty_values) > 0:
+                            columns_to_keep.append(col)
+                    
+                    # 只保留非空列
+                    result_df = result_df[columns_to_keep]
+                    
+                    st.success("合并完成！")
+                    st.write(f"合并后总行数: {len(result_df)}，总列数: {len(result_df.columns)}")
+                    
+                    st.subheader("合并结果预览")
+                    st.dataframe(result_df.head(20))
+                    
+                    # 提供下载
+                    output_file = f"合并结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    result_df.to_excel(output_file, index=False)
+                    
+                    with open(output_file, "rb") as file:
+                        st.download_button(
+                            label="下载合并结果",
+                            data=file,
+                            file_name=output_file,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                except Exception as e:
+                    st.error(f"合并过程中出现错误: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+    else:
+        st.info("请至少上传两个Excel文件进行合并")
+
+elif app_mode == "简化表合并":
+    st.header("简化表合并")
+    st.info("此功能将纵向合并多个表格，并自动移除全空的列")
+    
+    # 文件上传
+    uploaded_files = st.file_uploader(
+        "上传需要合并的Excel文件（支持多个文件）",
+        type=["xlsx"],
+        accept_multiple_files=True,
+        key="simple_merge_files"
+    )
+    
+    if uploaded_files and len(uploaded_files) >= 2:
+        st.info(f"已选择 {len(uploaded_files)} 个文件")
+        
+        # 显示上传的文件名
+        file_names = [f.name for f in uploaded_files]
+        st.write("上传的文件:")
+        for i, name in enumerate(file_names):
+            st.write(f"{i+1}. {name}")
+        
+        try:
+            # 读取所有文件
+            dataframes = []
+            for uploaded_file in uploaded_files:
+                df = pd.read_excel(uploaded_file)
+                # 确保所有列都是字符串类型，避免PyArrow错误
+                for col in df.columns:
+                    df[col] = df[col].astype(str)
+                dataframes.append(df)
+            
+            st.subheader("文件预览")
+            tabs = st.tabs([f"表{i+1}" for i in range(len(dataframes))])
+            for i, (tab, df) in enumerate(zip(tabs, dataframes)):
+                with tab:
+                    st.write(f"表{i+1} ({file_names[i]}) 列名:")
+                    st.write(list(df.columns))
+                    st.write(f"前5行数据:")
+                    st.dataframe(df.head(5))
+            
+            if st.button("执行合并"):
+                with st.spinner("正在执行合并..."):
+                    try:
+                        # 纵向合并所有表格
+                        result_df = pd.concat(dataframes, ignore_index=True)
+                        
+                        # 确保所有列都是字符串类型
+                        for col in result_df.columns:
+                            result_df[col] = result_df[col].astype(str)
+                        
+                        st.write(f"合并后总行数: {len(result_df)}")
+                        
+                        # 显示所有列名
+                        st.write("所有列名:")
+                        all_columns = list(result_df.columns)
+                        st.write(all_columns)
+                        
+                        # 自动过滤全空的列
+                        columns_to_keep = []
+                        for col in result_df.columns:
+                            # 检查列是否全为空值（除了标题）
+                            non_empty_values = result_df[col][result_df[col].notna() & (result_df[col] != '') & (result_df[col] != 'nan')]
+                            if len(non_empty_values) > 0:
+                                columns_to_keep.append(col)
+                        
+                        st.write("非空列:")
+                        st.write(columns_to_keep)
+                        
+                        # 选择要保留的列
+                        st.subheader("选择要保留的列")
+                        selected_columns = st.multiselect(
+                            "选择要保留的列（默认选择所有非空列）",
+                            all_columns,
+                            default=columns_to_keep,
+                            key="selected_columns"
+                        )
+                        
+                        # 如果用户选择了列，则只保留这些列
+                        if selected_columns:
+                            result_df = result_df[selected_columns]
+                        
+                        st.success("合并完成！")
+                        st.subheader("合并结果统计")
+                        st.write(f"合并后总行数: {len(result_df)}")
+                        st.write(f"合并后总列数: {len(result_df.columns)}")
+                        
+                        st.subheader("合并结果预览")
+                        st.dataframe(result_df.head(20))
+                        
+                        # 提供下载
+                        output_file = f"简化合并结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                        result_df.to_excel(output_file, index=False)
+                        
+                        with open(output_file, "rb") as file:
+                            st.download_button(
+                                label="下载合并结果",
+                                data=file,
+                                file_name=output_file,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    except Exception as e:
+                        st.error(f"合并过程中出现错误: {str(e)}")
+                        import traceback
+                        st.error(traceback.format_exc())
+        except Exception as e:
+            st.error(f"文件读取或处理过程中出现错误: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+    else:
+        st.info("请至少上传两个Excel文件进行合并")
 
 # 页脚
 st.markdown("---")
