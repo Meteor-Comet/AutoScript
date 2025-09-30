@@ -1212,27 +1212,96 @@ elif app_mode == "物流单号匹配":
                             pending_shipment_df[pending_name_select] = pending_shipment_df[pending_name_select].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
                             logistics_df_unique[logistics_name_select] = logistics_df_unique[logistics_name_select].astype(str).str.strip().str.replace(r'\s+', ' ', regex=True)
                             
+                            # 检查重复匹配情况
+                            pending_counts = pending_shipment_df[pending_name_select].value_counts().reset_index()
+                            pending_counts.columns = [pending_name_select, 'pending_count']
+                            
+                            logistics_counts = logistics_df_unique[logistics_name_select].value_counts().reset_index()
+                            logistics_counts.columns = [logistics_name_select, 'logistics_count']
+                            
+                            # 合并计数信息
+                            if pending_name_select == logistics_name_select:
+                                count_info = pd.merge(pending_counts, logistics_counts, on=pending_name_select, how='outer').fillna(0)
+                            else:
+                                count_info = pd.merge(pending_counts, logistics_counts, left_on=pending_name_select, right_on=logistics_name_select, how='outer').fillna(0)
+                            
+                            count_info['pending_count'] = count_info['pending_count'].astype(int)
+                            count_info['logistics_count'] = count_info['logistics_count'].astype(int)
+                            
+                            # 显示重复数据统计
+                            mismatched_data = count_info[(count_info['pending_count'] > 1) | (count_info['logistics_count'] > 1)]
+                            if not mismatched_data.empty:
+                                with st.expander("查看重复匹配数据统计"):
+                                    st.info("检测到重复匹配数据，建议启用顺序匹配功能以获得更好的匹配结果")
+                                    st.dataframe(mismatched_data)
+                            
+                            # 检查是否启用顺序匹配
+                            use_sequential_matching = st.checkbox("启用顺序匹配（处理多对多情况）", value=False, key="sequential_matching")
+                            if use_sequential_matching and not mismatched_data.empty:
+                                st.info("已启用顺序匹配，将按顺序匹配重复数据")
+                            
                             # 为了避免重复列名，我们先从主表中移除与物流表同名的列（除了匹配键）
                             pending_shipment_for_merge = pending_shipment_df.copy()
-                            columns_to_drop = []
                             for col in columns_to_add:
-                                if col in pending_shipment_for_merge.columns:
-                                    columns_to_drop.append(col)
+                                if col in pending_shipment_for_merge.columns and col != pending_name_select:
+                                    pending_shipment_for_merge = pending_shipment_for_merge.drop(columns=[col])
                             
-                            if columns_to_drop:
-                                pending_shipment_for_merge = pending_shipment_for_merge.drop(columns=columns_to_drop)
-                            
-                            # 使用收件人作为匹配键
-                            merge_columns = [logistics_name_select] + columns_to_add
-                            
-                            result_df = pd.merge(
-                                pending_shipment_for_merge,
-                                logistics_df_unique[merge_columns],
-                                left_on=pending_name_select,
-                                right_on=logistics_name_select,
-                                how='left',
-                                sort=False
-                            )
+                            if use_sequential_matching:
+                                # 实现顺序匹配逻辑
+                                result_df = pending_shipment_for_merge.copy()
+                                
+                                # 为每个数据框添加行号，用于顺序匹配
+                                result_df['_pending_row_num'] = range(len(result_df))
+                                
+                                logistics_with_row_num = logistics_df_unique[merge_columns].copy()
+                                logistics_with_row_num['_logistics_row_num'] = range(len(logistics_with_row_num))
+                                
+                                # 为每个收货人添加序号
+                                result_df['_pending_seq'] = result_df.groupby(pending_name_select).cumcount()
+                                logistics_with_row_num['_logistics_seq'] = logistics_with_row_num.groupby(logistics_name_select).cumcount()
+                                
+                                # 执行顺序匹配
+                                if pending_name_select == logistics_name_select:
+                                    result_df = pd.merge(
+                                        result_df,
+                                        logistics_with_row_num,
+                                        left_on=[pending_name_select, '_pending_seq'],
+                                        right_on=[logistics_name_select, '_logistics_seq'],
+                                        how='left',
+                                        sort=False
+                                    )
+                                else:
+                                    result_df = pd.merge(
+                                        result_df,
+                                        logistics_with_row_num,
+                                        left_on=[pending_name_select, '_pending_seq'],
+                                        right_on=[logistics_name_select, '_logistics_seq'],
+                                        how='left',
+                                        sort=False
+                                    )
+                                
+                                # 处理匹配列重复的问题
+                                if pending_name_select == logistics_name_select and f"{logistics_name_select}_x" in result_df.columns:
+                                    result_df = result_df.drop(columns=[f"{logistics_name_select}_y"]).rename(columns={f"{logistics_name_select}_x": logistics_name_select})
+                                
+                                # 清理临时列
+                                result_df = result_df.drop(columns=['_pending_row_num', '_logistics_row_num', '_pending_seq', '_logistics_seq'])
+                            else:
+                                # 使用收件人作为匹配键
+                                merge_columns = [logistics_name_select] + columns_to_add
+                                
+                                result_df = pd.merge(
+                                    pending_shipment_for_merge,
+                                    logistics_df_unique[merge_columns],
+                                    left_on=pending_name_select,
+                                    right_on=logistics_name_select,
+                                    how='left',
+                                    sort=False
+                                )
+                                
+                                # 处理匹配列重复的问题
+                                if pending_name_select == logistics_name_select and f"{logistics_name_select}_x" in result_df.columns:
+                                    result_df = result_df.drop(columns=[f"{logistics_name_select}_y"]).rename(columns={f"{logistics_name_select}_x": logistics_name_select})
                             
                             # 确保结果DataFrame的所有列都是字符串类型
                             for col in result_df.columns:
