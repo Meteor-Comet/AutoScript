@@ -85,7 +85,7 @@ st.markdown("---")
 st.sidebar.header("操作选项")
 app_mode = st.sidebar.selectbox(
     "选择功能",
-    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP", "物流单号匹配", "表合并"]
+    ["批量处理发放明细", "核对发货明细与供应商订单", "标记发货明细集采信息", "导入直邮明细到三择导单", "增强版VLOOKUP", "物流单号匹配", "表合并", "供应商订单分析", "商品名称标准化", "商品数量转换"]
 )
 
 def process_发放明细查询文件(file_path):
@@ -865,7 +865,7 @@ elif app_mode == "导入直邮明细到三择导单":
                     
                     with open(output, "rb") as f:
                         st.download_button("下载更新后的三择导单", f, file_name=output)
-                    
+                        
                     # 导入完成后清空已处理数据列表
                     if st.button("清空已处理文件列表并开始下一轮导入"):
                         st.session_state.processed_data_list = []
@@ -881,6 +881,150 @@ elif app_mode == "导入直邮明细到三择导单":
             st.error(traceback.format_exc())
 
 # 添加新的功能模块
+elif app_mode == "商品名称标准化":
+    st.header("商品名称标准化")
+    st.info("此功能用于将发货明细中的不规范商品名称标准化为统一格式")
+    
+    # 商品列表（标准名称）
+    product_list = [
+        "奥克斯（AUX） 除螨仪 90W （计价单位：台）",
+        "国产定制 黄金葉  盒装抽纸  （计价单位：盒）",
+        "国产定制 黄金葉 环保塑料袋  50个/捆 300个/箱 （计价单位：个）",
+        "国产定制 黄金葉 两盒装翻盖式礼盒 30个/箱 （计价单位：个）",
+        "国产定制 黄金葉 湿纸巾 10片/包 （计价单位：包）",
+        "国产定制 黄金葉 四盒装翻盖式礼盒 30个/箱 （计价单位：个）",
+        "国产定制 黄金葉 四盒装简易封套（天叶品系） 50个/箱 （计价单位：个）",
+        "国产定制 黄金葉 天叶叁毫克   两条装纸袋 （计价单位：个）",
+        "国产定制 黄金葉 五盒装简易封套（常规款） 50个/箱 （计价单位：个）",
+        "国产定制 黄金葉 五盒装简易封套（细支款） 50个/箱 （计价单位：个）",
+        "国产定制 黄金葉 五盒装简易封套（中支款） 50个/箱 （计价单位：个）",
+        "品胜（PISEN） 数据线三合一充电线100W  一拖三 （计价单位：条）",
+        "有色 剃须刀便携合金电动刮胡刀男士  MINI 2.0 （计价单位：个） 颜色随机"
+    ]
+    
+    # 文件上传
+    uploaded_file = st.file_uploader("上传发货明细文件", type=["xlsx"], key="standardize_products")
+    
+    if uploaded_file:
+        try:
+            # 读取文件
+            df = pd.read_excel(uploaded_file)
+            
+            # 确保所有列都是字符串类型
+            for col in df.columns:
+                df[col] = df[col].astype(str)
+            
+            st.subheader("原始数据预览")
+            st.dataframe(df.head(10))
+            
+            # 选择产品名称列 - 添加对"货品名称"列的支持
+            if '货品名称' in df.columns:
+                product_col = '货品名称'
+            elif '产品名称' in df.columns:
+                product_col = '产品名称'
+            else:
+                product_col = st.selectbox("选择包含产品名称的列", df.columns)
+            
+            # 显示当前产品名称的唯一值
+            unique_products = df[product_col].unique()
+            st.subheader("当前文件中的产品名称")
+            st.write(f"共有 {len(unique_products)} 个不同的产品名称:")
+            st.dataframe(pd.DataFrame(unique_products, columns=['产品名称']))
+            
+            # 处理标准化
+            if st.button("执行标准化"):
+                with st.spinner("正在执行商品名称标准化..."):
+                    # 创建标准化映射
+                    standardized_mapping = {}
+                    
+                    # 定义特定的映射规则
+                    special_mappings = {
+                        "硬盒纸抽（130抽）（250506）": "黄金葉  盒装抽纸  （计价单位：盒） 国产定制",
+                        "湿巾（10片/包）（250506）": "黄金葉 湿纸巾 10片/包 （计价单位：包） 国产定制"
+                    }
+                    
+                    # 定义关键词映射，用于提取商品的唯一关键词进行匹配
+                    keyword_mappings = {
+                        "除螨仪": "奥克斯（AUX） 除螨仪 90W （计价单位：台）",
+                        "抽": "国产定制 黄金葉  盒装抽纸  （计价单位：盒）",
+                        "塑料袋": "国产定制 黄金葉 环保塑料袋  50个/捆 300个/箱 （计价单位：个）",
+                        "两盒装翻盖式礼盒": "国产定制 黄金葉 两盒装翻盖式礼盒 30个/箱 （计价单位：个）",
+                        "湿纸巾": "国产定制 黄金葉 湿纸巾 10片/包 （计价单位：包）",
+                        "四盒装翻盖式礼盒": "国产定制 黄金葉 四盒装翻盖式礼盒 30个/箱 （计价单位：个）",
+                        "四盒装简易封套（天叶品系）": "国产定制 黄金葉 四盒装简易封套（天叶品系） 50个/箱 （计价单位：个）",
+                        "天叶叁毫克": "国产定制 黄金葉 天叶叁毫克   两条装纸袋 （计价单位：个）",
+                        "五盒装简易封套（常规款）": "国产定制 黄金葉 五盒装简易封套（常规款） 50个/箱 （计价单位：个）",
+                        "五盒装简易封套（细支款）": "国产定制 黄金葉 五盒装简易封套（细支款） 50个/箱 （计价单位：个）",
+                        "五盒装简易封套（中支款）": "国产定制 黄金葉 五盒装简易封套（中支款） 50个/箱 （计价单位：个）",
+                        "数据线三合一充电线100W": "品胜（PISEN） 数据线三合一充电线100W  一拖三 （计价单位：条）",
+                        "剃须刀": "有色 剃须刀便携合金电动刮胡刀男士  MINI 2.0 （计价单位：个） 颜色随机"
+                    }
+                    
+                    # 对每个不规范的产品名称进行匹配
+                    for product in unique_products:
+                        # 首先检查特殊映射规则
+                        if product in special_mappings:
+                            standardized_mapping[product] = special_mappings[product]
+                            continue
+                            
+                        # 然后检查是否能通过关键词匹配
+                        matched = False
+                        for keyword, standard_name in keyword_mappings.items():
+                            # 如果产品名称包含关键词，则匹配
+                            if keyword in product:
+                                standardized_mapping[product] = standard_name
+                                matched = True
+                                break
+                        
+                        # 如果通过关键词无法匹配，则使用模糊匹配
+                        if not matched:
+                            # 导入difflib用于模糊匹配
+                            import difflib
+                            matches = difflib.get_close_matches(product, product_list, n=1, cutoff=0.6)
+                            if matches:
+                                standardized_mapping[product] = matches[0]
+                            else:
+                                # 否则保持原名称
+                                standardized_mapping[product] = product
+                    
+                    # 应用标准化映射
+                    df['标准化产品名称'] = df[product_col].map(standardized_mapping)
+                    
+                    # 显示标准化结果
+                    st.subheader("标准化结果")
+                    st.success("商品名称标准化完成！")
+                    
+                    # 显示映射关系
+                    mapping_df = pd.DataFrame(list(standardized_mapping.items()), columns=['原始名称', '标准化名称'])
+                    st.write("名称映射关系:")
+                    st.dataframe(mapping_df)
+                    
+                    # 显示标准化后的数据预览
+                    st.subheader("标准化后数据预览")
+                    st.dataframe(df[['标准化产品名称'] + [col for col in df.columns if col != '标准化产品名称']].head(10))
+                    
+                    # 统计信息
+                    unchanged_count = sum(1 for k, v in standardized_mapping.items() if k == v)
+                    changed_count = len(standardized_mapping) - unchanged_count
+                    st.info(f"标准化统计: {changed_count} 个名称已修改, {unchanged_count} 个名称保持不变")
+                    
+                    # 提供下载
+                    output_file = f"标准化发货明细_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    df.to_excel(output_file, index=False)
+                    
+                    with open(output_file, "rb") as file:
+                        st.download_button(
+                            label="下载标准化结果",
+                            data=file,
+                            file_name=output_file,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        
+        except Exception as e:
+            st.error(f"处理文件时出错: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+
 elif app_mode == "增强版VLOOKUP":
     st.header("增强版VLOOKUP")
     st.info("此功能允许您从参考表中批量匹配多个列到主表中")
@@ -1361,6 +1505,140 @@ elif app_mode == "物流单号匹配":
             import traceback
             st.error(traceback.format_exc())
 
+# 添加新的功能模块
+elif app_mode == "商品数量转换":
+    st.header("商品数量转换")
+    st.info("此功能用于将发货明细中规格为'箱'的商品数量转换为'个'，并新增'数量（个）'列")
+
+    # 文件上传
+    uploaded_file = st.file_uploader("上传发货明细文件", type=["xlsx"], key="convert_quantities")
+
+    if uploaded_file:
+        try:
+            # 读取文件
+            df = pd.read_excel(uploaded_file)
+
+            st.subheader("原始数据预览")
+            st.dataframe(df.head(10))
+
+            # 选择必要的列
+            if '货品名称' in df.columns:
+                product_col = '货品名称'
+            elif '产品名称' in df.columns:
+                product_col = '产品名称'
+            else:
+                product_col = st.selectbox("选择包含产品名称的列", df.columns)
+
+            if '数量' in df.columns:
+                quantity_col = '数量'
+            else:
+                quantity_col = st.selectbox("选择包含数量的列", df.columns)
+
+            if '规格' in df.columns:
+                unit_col = '规格'
+            else:
+                unit_col = st.selectbox("选择包含规格的列", df.columns)
+
+            # 定义转换规则 - 使用唯一关键词进行精确匹配
+            conversion_rules = {
+                "四盒装翻盖式礼盒": 30,  # 30个/箱
+                "盒装抽纸": 20,  # 20个（盒）/箱
+                "天叶叁毫克": 100,  # 100个/箱
+                "抽纸": 20,  # 20个（盒）/箱
+                "环保塑料袋": 300,  # 300个/箱
+                "两盒装翻盖式礼盒": 30,  # 30个/箱
+                "湿纸巾": 50,  # 50个（包）/箱
+                "四盒装简易封套（天叶品系）": 50,  # 50个/箱
+                "五盒装简易封套（常规款）": 50,  # 50个/箱
+                "五盒装简易封套（细支款）": 50,  # 50个/箱
+                "五盒装简易封套（中支款）": 50,  # 50个/箱
+                "除螨仪": 1,  # 单个商品，不需要转换倍数
+                "数据线三合一充电线100W": 1,  # 单个商品
+                "剃须刀便携合金电动刮胡刀男士": 1  # 单个商品
+            }
+
+            # 显示当前文件中的规格信息
+            unique_units = df[unit_col].unique()
+            st.subheader("当前文件中的规格")
+            st.write(f"共有 {len(unique_units)} 个不同的规格:")
+            st.dataframe(pd.DataFrame(unique_units, columns=['规格']))
+
+            # 处理数量转换
+            if st.button("执行数量转换"):
+                with st.spinner("正在执行商品数量转换..."):
+                    # 创建结果DataFrame的副本，完全保持原始数据不变
+                    result_df = df.copy()
+
+                    # 添加新列"数量（个）"，初始值与原始数量相同
+                    result_df['数量（个）'] = pd.to_numeric(result_df[quantity_col], errors='coerce').fillna(0)
+
+                    # 遍历数据框中的每一行，只对箱装商品进行转换
+                    for index, row in result_df.iterrows():
+                        # 检查规格是否为"箱"
+                        if '箱' in str(row[unit_col]):
+                            # 获取产品名称
+                            product_name = str(row[product_col])
+
+                            # 查找匹配的转换规则
+                            multiplier = None
+                            for keyword, mult in conversion_rules.items():
+                                if (keyword == product_name or
+                                        product_name.startswith(keyword) or
+                                        product_name.endswith(keyword) or
+                                        keyword in product_name):
+                                    multiplier = mult
+                                    break
+
+                            # 如果找到匹配的规则，执行转换
+                            if multiplier and multiplier > 1:
+                                try:
+                                    original_quantity = float(row[quantity_col])
+                                    converted_quantity = original_quantity * multiplier
+                                    # 只更新"数量（个）"列
+                                    result_df.at[index, '数量（个）'] = converted_quantity
+                                except (ValueError, TypeError):
+                                    # 如果转换失败，保持原值
+                                    pass
+
+                    # 显示转换结果
+                    st.success("商品数量转换完成！")
+
+                    # 显示转换后的数据预览
+                    st.subheader("转换后数据预览")
+
+                    # 确保显示规格、数量和数量（个）列
+                    preview_columns = []
+                    if unit_col in result_df.columns:
+                        preview_columns.append(unit_col)
+                    if quantity_col in result_df.columns:
+                        preview_columns.append(quantity_col)
+                    if '数量（个）' in result_df.columns:
+                        preview_columns.append('数量（个）')
+
+                    # 添加其他列，但不重复
+                    for col in result_df.columns:
+                        if col not in preview_columns:
+                            preview_columns.append(col)
+
+                    st.dataframe(result_df[preview_columns].head(10))
+
+                    # 提供下载
+                    output_file = f"转换后发货明细_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    result_df.to_excel(output_file, index=False)
+
+                    with open(output_file, "rb") as file:
+                        st.download_button(
+                            label="下载转换结果",
+                            data=file,
+                            file_name=output_file,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+
+        except Exception as e:
+            st.error(f"处理文件时出错: {str(e)}")
+            import traceback
+            st.error(traceback.format_exc())
+
 elif app_mode == "表合并":
     st.header("表合并")
     st.info("此功能将纵向合并多个表格，并自动移除全空的列")
@@ -1429,117 +1707,220 @@ elif app_mode == "表合并":
                     st.error(traceback.format_exc())
     else:
         st.info("请至少上传两个Excel文件进行合并")
+# elif app_mode == "简化表合并":
+#     st.header("简化表合并")
+#     st.info("此功能将纵向合并多个表格，并自动移除全空的列")
+#
+#     # 文件上传
+#     uploaded_files = st.file_uploader(
+#         "上传需要合并的Excel文件（支持多个文件）",
+#         type=["xlsx"],
+#         accept_multiple_files=True,
+#         key="simple_merge_files"
+#     )
+#
+#     if uploaded_files and len(uploaded_files) >= 2:
+#         st.info(f"已选择 {len(uploaded_files)} 个文件")
+#
+#         # 显示上传的文件名
+#         file_names = [f.name for f in uploaded_files]
+#         st.write("上传的文件:")
+#         for i, name in enumerate(file_names):
+#             st.write(f"{i+1}. {name}")
+#
+#         try:
+#             # 读取所有文件
+#             dataframes = []
+#             for uploaded_file in uploaded_files:
+#                 df = pd.read_excel(uploaded_file)
+#                 # 确保所有列都是字符串类型，避免PyArrow错误
+#                 for col in df.columns:
+#                     df[col] = df[col].astype(str)
+#                 dataframes.append(df)
+#
+#             st.subheader("文件预览")
+#             tabs = st.tabs([f"表{i+1}" for i in range(len(dataframes))])
+#             for i, (tab, df) in enumerate(zip(tabs, dataframes)):
+#                 with tab:
+#                     st.write(f"表{i+1} ({file_names[i]}) 列名:")
+#                     st.write(list(df.columns))
+#                     st.write(f"前5行数据:")
+#                     st.dataframe(df.head(5))
+#
+#             if st.button("执行合并"):
+#                 with st.spinner("正在执行合并..."):
+#                     try:
+#                         # 纵向合并所有表格
+#                         result_df = pd.concat(dataframes, ignore_index=True)
+#
+#                         # 确保所有列都是字符串类型
+#                         for col in result_df.columns:
+#                             result_df[col] = result_df[col].astype(str)
+#
+#                         st.write(f"合并后总行数: {len(result_df)}")
+#
+#                         # 显示所有列名
+#                         st.write("所有列名:")
+#                         all_columns = list(result_df.columns)
+#                         st.write(all_columns)
+#
+#                         # 自动过滤全空的列
+#                         columns_to_keep = []
+#                         for col in result_df.columns:
+#                             # 检查列是否全为空值（除了标题）
+#                             non_empty_values = result_df[col][result_df[col].notna() & (result_df[col] != '') & (result_df[col] != 'nan')]
+#                             if len(non_empty_values) > 0:
+#                                 columns_to_keep.append(col)
+#
+#                         st.write("非空列:")
+#                         st.write(columns_to_keep)
+#
+#                         # 选择要保留的列
+#                         st.subheader("选择要保留的列")
+#                         selected_columns = st.multiselect(
+#                             "选择要保留的列（默认选择所有非空列）",
+#                             all_columns,
+#                             default=columns_to_keep,
+#                             key="selected_columns"
+#                         )
+#
+#                         # 如果用户选择了列，则只保留这些列
+#                         if selected_columns:
+#                             result_df = result_df[selected_columns]
+#
+#                         st.success("合并完成！")
+#                         st.subheader("合并结果统计")
+#                         st.write(f"合并后总行数: {len(result_df)}")
+#                         st.write(f"合并后总列数: {len(result_df.columns)}")
+#
+#                         st.subheader("合并结果预览")
+#                         st.dataframe(result_df.head(20))
+#
+#                         # 提供下载
+#                         output_file = f"简化合并结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+#                         result_df.to_excel(output_file, index=False)
+#
+#                         with open(output_file, "rb") as file:
+#                             st.download_button(
+#                                 label="下载合并结果",
+#                                 data=file,
+#                                 file_name=output_file,
+#                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+#                             )
+#                     except Exception as e:
+#                         st.error(f"合并过程中出现错误: {str(e)}")
+#                         import traceback
+#                         st.error(traceback.format_exc())
+#         except Exception as e:
+#             st.error(f"文件读取或处理过程中出现错误: {str(e)}")
+#             import traceback
+#             st.error(traceback.format_exc())
+#     else:
+#         st.info("请至少上传两个Excel文件进行合并")
 
-elif app_mode == "简化表合并":
-    st.header("简化表合并")
-    st.info("此功能将纵向合并多个表格，并自动移除全空的列")
-    
+elif app_mode == "供应商订单分析":
+    st.header("供应商订单分析")
+    st.info("此功能用于分析供应商订单数据，包括产品、价格、数量、总金额等维度的统计分析")
+
     # 文件上传
-    uploaded_files = st.file_uploader(
-        "上传需要合并的Excel文件（支持多个文件）",
-        type=["xlsx"],
-        accept_multiple_files=True,
-        key="simple_merge_files"
-    )
-    
-    if uploaded_files and len(uploaded_files) >= 2:
-        st.info(f"已选择 {len(uploaded_files)} 个文件")
-        
-        # 显示上传的文件名
-        file_names = [f.name for f in uploaded_files]
-        st.write("上传的文件:")
-        for i, name in enumerate(file_names):
-            st.write(f"{i+1}. {name}")
-        
+    uploaded_file = st.file_uploader("上传供应商订单文件", type=["xlsx"], key="supplier_analysis")
+
+    if uploaded_file:
         try:
-            # 读取所有文件
-            dataframes = []
-            for uploaded_file in uploaded_files:
-                df = pd.read_excel(uploaded_file)
-                # 确保所有列都是字符串类型，避免PyArrow错误
-                for col in df.columns:
+            df = pd.read_excel(uploaded_file)
+
+            # 显示数据基本信息
+            # st.subheader("数据概览")
+            # st.write(f"总行数: {len(df)}")
+            # st.write(f"总列数: {len(df.columns)}")
+
+            # 数据预处理
+            # 将数值列转换为正确的数据类型
+            numeric_columns = ['数量', '单价(元)', '含税总金额(元)']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+            # 确保非数值列都是字符串类型
+            for col in df.columns:
+                if col not in numeric_columns:
                     df[col] = df[col].astype(str)
-                dataframes.append(df)
-            
-            st.subheader("文件预览")
-            tabs = st.tabs([f"表{i+1}" for i in range(len(dataframes))])
-            for i, (tab, df) in enumerate(zip(tabs, dataframes)):
-                with tab:
-                    st.write(f"表{i+1} ({file_names[i]}) 列名:")
-                    st.write(list(df.columns))
-                    st.write(f"前5行数据:")
-                    st.dataframe(df.head(5))
-            
-            if st.button("执行合并"):
-                with st.spinner("正在执行合并..."):
-                    try:
-                        # 纵向合并所有表格
-                        result_df = pd.concat(dataframes, ignore_index=True)
-                        
-                        # 确保所有列都是字符串类型
-                        for col in result_df.columns:
-                            result_df[col] = result_df[col].astype(str)
-                        
-                        st.write(f"合并后总行数: {len(result_df)}")
-                        
-                        # 显示所有列名
-                        st.write("所有列名:")
-                        all_columns = list(result_df.columns)
-                        st.write(all_columns)
-                        
-                        # 自动过滤全空的列
-                        columns_to_keep = []
-                        for col in result_df.columns:
-                            # 检查列是否全为空值（除了标题）
-                            non_empty_values = result_df[col][result_df[col].notna() & (result_df[col] != '') & (result_df[col] != 'nan')]
-                            if len(non_empty_values) > 0:
-                                columns_to_keep.append(col)
-                        
-                        st.write("非空列:")
-                        st.write(columns_to_keep)
-                        
-                        # 选择要保留的列
-                        st.subheader("选择要保留的列")
-                        selected_columns = st.multiselect(
-                            "选择要保留的列（默认选择所有非空列）",
-                            all_columns,
-                            default=columns_to_keep,
-                            key="selected_columns"
-                        )
-                        
-                        # 如果用户选择了列，则只保留这些列
-                        if selected_columns:
-                            result_df = result_df[selected_columns]
-                        
-                        st.success("合并完成！")
-                        st.subheader("合并结果统计")
-                        st.write(f"合并后总行数: {len(result_df)}")
-                        st.write(f"合并后总列数: {len(result_df.columns)}")
-                        
-                        st.subheader("合并结果预览")
-                        st.dataframe(result_df.head(20))
-                        
-                        # 提供下载
-                        output_file = f"简化合并结果_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                        result_df.to_excel(output_file, index=False)
-                        
-                        with open(output_file, "rb") as file:
-                            st.download_button(
-                                label="下载合并结果",
-                                data=file,
-                                file_name=output_file,
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
-                    except Exception as e:
-                        st.error(f"合并过程中出现错误: {str(e)}")
-                        import traceback
-                        st.error(traceback.format_exc())
+
+            # st.write("列名:")
+            # st.write(list(df.columns))
+            #
+            # st.subheader("前10行数据预览")
+            # st.dataframe(df.head(10))
+
+            # 分析部分
+            st.subheader("数据分析")
+
+            # 1. 每个供应商的详细分析
+            if all(col in df.columns for col in ['供应商', '商品名称', '数量', '含税总金额(元)']):
+                st.write("### 各供应商详细分析")
+                suppliers = df['供应商'].unique()
+
+                # 限制显示的供应商数量，避免界面过于复杂
+                max_suppliers = min(10, len(suppliers))
+                if len(suppliers) > 10:
+                    st.warning(f"供应商数量较多，仅显示前{max_suppliers}个供应商的详细信息")
+
+                # 为每个供应商创建一个可折叠区域
+                for i, supplier in enumerate(suppliers[:max_suppliers]):
+                    with st.expander(f"{supplier} 详细信息"):
+                        st.write(f"##### {supplier}")
+                        supplier_data = df[df['供应商'] == supplier]
+
+                        # 该供应商的商品数量和总金额
+                        if '商品名称' in df.columns and '数量' in df.columns and '含税总金额(元)' in df.columns:
+                            supplier_product_summary = supplier_data.groupby('商品名称').agg({
+                                '数量': 'sum',
+                                '含税总金额(元)': 'sum'
+                            }).sort_values('含税总金额(元)', ascending=False).head(15)  # 限制显示前15个商品
+
+                            st.write("商品数量和总金额:")
+                            st.dataframe(supplier_product_summary)
+
+                            # 可视化商品数量和总金额
+                            if not supplier_product_summary.empty:
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write("商品数量分布:")
+                                    st.bar_chart(supplier_product_summary['数量'])
+                                with col2:
+                                    st.write("商品总金额分布:")
+                                    st.bar_chart(supplier_product_summary['含税总金额(元)'])
+
+                        # 该供应商的地区分布
+                        if '省份' in df.columns and '含税总金额(元)' in df.columns:
+                            supplier_province = supplier_data.groupby('省份')['含税总金额(元)'].sum().sort_values(
+                                ascending=False)
+                            if not supplier_province.empty:
+                                st.write("地区订单总金额分布:")
+                                st.bar_chart(supplier_province)
+                                st.dataframe(supplier_province)
+
+            # 2. 综合统计表
+            st.write("### 综合统计")
+            if all(col in df.columns for col in ['供应商', '商品名称', '数量', '含税总金额(元)']):
+                summary_stats = df.groupby('供应商').agg({
+                    '含税总金额(元)': ['sum', 'mean', 'count'],
+                    '数量': 'sum'
+                }).round(2)
+                summary_stats.columns = ['总金额', '平均金额', '订单数', '总数量']
+                st.dataframe(summary_stats)
+
+            st.success("分析完成！")
+
         except Exception as e:
-            st.error(f"文件读取或处理过程中出现错误: {str(e)}")
+            st.error(f"数据分析过程中出现错误: {str(e)}")
             import traceback
+
             st.error(traceback.format_exc())
     else:
-        st.info("请至少上传两个Excel文件进行合并")
+        st.info("请上传供应商订单文件进行分析")
+
+
 
 # 页脚
 st.markdown("---")
