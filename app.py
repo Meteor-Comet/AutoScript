@@ -1827,12 +1827,8 @@ elif app_mode == "供应商订单分析":
 
     if uploaded_file:
         try:
-            df = pd.read_excel(uploaded_file)
-
-            # 显示数据基本信息
-            # st.subheader("数据概览")
-            # st.write(f"总行数: {len(df)}")
-            # st.write(f"总列数: {len(df.columns)}")
+            # 读取文件，正确处理表头
+            df = pd.read_excel(uploaded_file, header=1)  # 假设第二行是真正的列名
 
             # 数据预处理
             # 将数值列转换为正确的数据类型
@@ -1846,17 +1842,12 @@ elif app_mode == "供应商订单分析":
                 if col not in numeric_columns:
                     df[col] = df[col].astype(str)
 
-            # st.write("列名:")
-            # st.write(list(df.columns))
-            #
-            # st.subheader("前10行数据预览")
-            # st.dataframe(df.head(10))
-
             # 分析部分
             st.subheader("数据分析")
 
             # 1. 每个供应商的详细分析
-            if all(col in df.columns for col in ['供应商', '商品名称', '数量', '含税总金额(元)']):
+            required_columns = ['供应商', '商品名称', '数量', '含税总金额(元)']
+            if all(col in df.columns for col in required_columns):
                 st.write("### 各供应商详细分析")
                 suppliers = df['供应商'].unique()
 
@@ -1883,13 +1874,17 @@ elif app_mode == "供应商订单分析":
 
                             # 可视化商品数量和总金额
                             if not supplier_product_summary.empty:
+                                # 确保数据类型正确
+                                quantity_data = supplier_product_summary['数量'].astype(float)
+                                amount_data = supplier_product_summary['含税总金额(元)'].astype(float)
+
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     st.write("商品数量分布:")
-                                    st.bar_chart(supplier_product_summary['数量'])
+                                    st.bar_chart(quantity_data)
                                 with col2:
                                     st.write("商品总金额分布:")
-                                    st.bar_chart(supplier_product_summary['含税总金额(元)'])
+                                    st.bar_chart(amount_data)
 
                         # 该供应商的地区分布
                         if '省份' in df.columns and '含税总金额(元)' in df.columns:
@@ -1897,7 +1892,9 @@ elif app_mode == "供应商订单分析":
                                 ascending=False)
                             if not supplier_province.empty:
                                 st.write("地区订单总金额分布:")
-                                st.bar_chart(supplier_province)
+                                # 确保数据类型正确
+                                province_data = supplier_province.astype(float)
+                                st.bar_chart(province_data)
                                 st.dataframe(supplier_province)
 
             # 2. 综合统计表
@@ -1910,6 +1907,20 @@ elif app_mode == "供应商订单分析":
                 summary_stats.columns = ['总金额', '平均金额', '订单数', '总数量']
                 st.dataframe(summary_stats)
 
+                # 添加综合图表
+                st.write("### 综合分析图表")
+                # 确保数据类型正确
+                total_amount_by_supplier = df.groupby('供应商')['含税总金额(元)'].sum().astype(float)
+                total_quantity_by_supplier = df.groupby('供应商')['数量'].sum().astype(float)
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("各供应商总金额")
+                    st.bar_chart(total_amount_by_supplier)
+                with col2:
+                    st.write("各供应商总数量")
+                    st.bar_chart(total_quantity_by_supplier)
+
             st.success("分析完成！")
 
         except Exception as e:
@@ -1919,8 +1930,6 @@ elif app_mode == "供应商订单分析":
             st.error(traceback.format_exc())
     else:
         st.info("请上传供应商订单文件进行分析")
-
-
 
 # 页脚
 st.markdown("---")
