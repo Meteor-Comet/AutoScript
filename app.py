@@ -1589,39 +1589,24 @@ elif app_mode == "商品数量转换":
             # 筛选出有转换规则的商品
             products_with_rules = []
             for product in unique_products:
-                for keyword in conversion_rules.keys():
-                    if (keyword == product or
-                        product.startswith(keyword) or
-                        product.endswith(keyword) or
-                        keyword in product):
+                for keyword in conversion_rules.items():
+                    if (keyword[0] == product or
+                        product.startswith(keyword[0]) or
+                        product.endswith(keyword[0]) or
+                        keyword[0] in product):
                         products_with_rules.append(product)
                         break
             
             products_with_rules = list(set(products_with_rules))  # 去重
             
             if products_with_rules:
-                # 全选/全不选按钮
-                col1, col2 = st.columns(2)
-                with col1:
-                    select_all = st.button("全选")
-                with col2:
-                    select_none = st.button("全不选")
-                
                 # 商品多选
                 selected_products = st.multiselect(
                     f"选择要转换的商品（共{len(products_with_rules)}个可转换商品）",
                     products_with_rules,
-                    default=products_with_rules if select_all else [],
+                    default=products_with_rules,  # 默认全选
                     key="selected_products"
                 )
-                
-                # 处理全选/全不选逻辑
-                if select_all:
-                    selected_products = products_with_rules
-                    st.rerun()
-                elif select_none:
-                    selected_products = []
-                    st.rerun()
                 
                 st.info(f"已选择 {len(selected_products)} 个商品进行转换")
                 
@@ -1630,15 +1615,35 @@ elif app_mode == "商品数量转换":
                     st.subheader("选中商品的转换规则")
                     rule_info = []
                     for product in selected_products:
+                        # 检查商品是否需要转换（根据规格）
+                        product_data = df[df[product_col] == product]
+                        needs_box_to_individual = False
+                        needs_individual_to_box = False
+                        
+                        # 检查该商品的规格
+                        for _, row in product_data.iterrows():
+                            unit_str = str(row[unit_col])
+                            if '箱' in unit_str and '个' not in unit_str:
+                                needs_box_to_individual = True
+                            elif ('个' in unit_str or '台' in unit_str or '条' in unit_str or '包' in unit_str) and '箱' not in unit_str:
+                                needs_individual_to_box = True
+                        
                         for keyword, multiplier in conversion_rules.items():
                             if (keyword == product or
                                 product.startswith(keyword) or
                                 product.endswith(keyword) or
                                 keyword in product):
+                                # 根据转换方向和实际规格显示规则
                                 if conversion_direction == "箱 → 个":
-                                    rule_info.append(f"{product}: 1箱 = {multiplier}个")
-                                else:
-                                    rule_info.append(f"{product}: {multiplier}个 = 1箱")
+                                    if needs_box_to_individual:
+                                        rule_info.append(f"{product}: 1箱 = {multiplier}个")
+                                    else:
+                                        rule_info.append(f"{product}: 无需转换（规格已为个或非箱）")
+                                else:  # 个 → 箱
+                                    if needs_individual_to_box:
+                                        rule_info.append(f"{product}: {multiplier}个 = 1箱")
+                                    else:
+                                        rule_info.append(f"{product}: 无需转换（规格已为箱或非个）")
                                 break
                     
                     for info in rule_info:
@@ -1673,7 +1678,17 @@ elif app_mode == "商品数量转换":
                                 multiplier = mult
                                 break
                         
-                        if multiplier and multiplier > 1:
+                        # 检查是否需要转换
+                        need_convert = False
+                        if conversion_direction == "箱 → 个":
+                            if '箱' in str(row[unit_col]) and '个' not in str(row[unit_col]):
+                                need_convert = True
+                        elif conversion_direction == "个 → 箱":
+                            unit_str = str(row[unit_col])
+                            if ('个' in unit_str or '台' in unit_str or '条' in unit_str or '包' in unit_str) and '箱' not in unit_str:
+                                need_convert = True
+                        
+                        if multiplier and multiplier > 1 and need_convert:
                             if conversion_direction == "箱 → 个":
                                 converted_quantity = original_quantity * multiplier
                             else:  # 个 → 箱
@@ -1732,12 +1747,17 @@ elif app_mode == "商品数量转换":
 
                         # 只转换选中的商品
                         if product_name in selected_products:
-                            # 检查是否需要转换（根据转换方向判断规格）
+                            # 检查是否需要转换（根据转换方向和规格判断）
                             need_convert = False
-                            if conversion_direction == "箱 → 个" and '箱' in str(row[unit_col]):
-                                need_convert = True
-                            elif conversion_direction == "个 → 箱" and ('个' in str(row[unit_col]) or '台' in str(row[unit_col]) or '条' in str(row[unit_col]) or '包' in str(row[unit_col])):
-                                need_convert = True
+                            if conversion_direction == "箱 → 个":
+                                # 只有规格为"箱"的才需要转换
+                                if '箱' in str(row[unit_col]) and '个' not in str(row[unit_col]):
+                                    need_convert = True
+                            elif conversion_direction == "个 → 箱":
+                                # 只有规格为"个"、"台"、"条"、"包"等的才需要转换
+                                unit_str = str(row[unit_col])
+                                if ('个' in unit_str or '台' in unit_str or '条' in unit_str or '包' in unit_str) and '箱' not in unit_str:
+                                    need_convert = True
                             
                             if need_convert:
                                 # 查找匹配的转换规则
@@ -1776,7 +1796,9 @@ elif app_mode == "商品数量转换":
                         preview_columns.insert(0, '收货人')
                     
                     # 只显示有转换的记录
-                    converted_df = result_df[result_df[new_column_name] != result_df[quantity_col]]
+                    # 使用numpy数组比较来避免索引对齐问题
+                    converted_mask = result_df[new_column_name].values != result_df[quantity_col].values
+                    converted_df = result_df[converted_mask]
                     if not converted_df.empty:
                         st.write("已转换的记录：")
                         st.dataframe(converted_df[preview_columns].head(20))
