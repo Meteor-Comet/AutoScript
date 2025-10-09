@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import re
 
 def find_header_row(df):
     """
@@ -131,6 +132,120 @@ def is_phone_number(text):
     digits_only = ''.join(c for c in text if c.isdigit())
     # 检查数字长度是否在合理范围内
     return 7 <= len(digits_only) <= 13
+
+def identify_product_column_by_content(df, product_list):
+    """
+    通过内容分析和关键字匹配来识别商品列
+    
+    参数:
+    df: DataFrame - 要分析的数据
+    product_list: list - 标准商品名称列表
+    
+    返回:
+    str - 识别出的商品列名，如果未找到则返回None
+    """
+    # 获取标准商品关键字
+    product_keywords = set()
+    for product in product_list:
+        # 提取商品名称中的关键字（去除计量单位等）
+        keywords = re.findall(r'[\u4e00-\u9fff\w]+', product)
+        for keyword in keywords:
+            # 过滤掉通用的计量单位和描述词
+            if keyword not in ['个', '台', '条', '包', '箱', '计价', '单位', '规格', '定制']:
+                product_keywords.add(keyword)
+    
+    best_match_col = None
+    best_score = 0
+    
+    # 遍历每一列，计算匹配分数
+    for col in df.columns:
+        # 获取列中非空值
+        values = df[col].dropna().astype(str)
+        if len(values) == 0:
+            continue
+            
+        score = 0
+        
+        # 1. 检查值是否包含商品关键字
+        keyword_matches = 0
+        for value in values:
+            # 检查值中是否包含商品关键字
+            for keyword in product_keywords:
+                if keyword in value:
+                    keyword_matches += 1
+                    break
+        
+        # 计算关键字匹配得分（0-40分）
+        keyword_score = (keyword_matches / len(values)) * 40
+        score += keyword_score
+        
+        # 2. 检查值的文本特征（0-30分）
+        text_scores = []
+        for value in values:
+            # 商品名称通常有一定长度
+            length_score = 0
+            if 3 <= len(value) <= 50:
+                length_score = 10
+            elif 2 <= len(value) <= 100:
+                length_score = 5
+            text_scores.append(length_score)
+            
+            # 商品名称通常包含中文或英文
+            has_chinese = bool(re.search(r'[\u4e00-\u9fff]', value))
+            has_alpha = bool(re.search(r'[a-zA-Z]', value))
+            char_score = 0
+            if has_chinese or has_alpha:
+                char_score = 10
+            elif re.search(r'[\u4e00-\u9fff]', value) or re.search(r'[a-zA-Z]', value):
+                char_score = 5
+            text_scores.append(char_score)
+            
+        if text_scores:
+            text_score = sum(text_scores) / len(text_scores)
+            score += min(text_score, 30)  # 最多30分
+        
+        # 3. 检查唯一值比例（0-20分）
+        # 商品列通常有较多不同值，但不会是完全唯一的
+        unique_ratio = len(values.unique()) / len(values)
+        uniqueness_score = 0
+        if 0.1 <= unique_ratio <= 0.95:  # 独特值比例在10%-95%之间得分较高
+            uniqueness_score = 20 * (1 - abs(unique_ratio - 0.5) * 2)  # 0.5时得分最高
+        elif 0.05 <= unique_ratio <= 0.98:
+            uniqueness_score = 10
+        score += uniqueness_score
+        
+        # 4. 检查是否包含数字（0-10分）
+        # 商品名称可能包含数字（型号等），但不应该全是数字
+        numeric_scores = []
+        for value in values:
+            numeric_chars = len(re.findall(r'\d', value))
+            total_chars = len(value)
+            if total_chars > 0:
+                numeric_ratio = numeric_chars / total_chars
+                # 数字比例在20%-80%之间得分较高
+                if 0.2 <= numeric_ratio <= 0.8:
+                    numeric_scores.append(10)
+                elif 0.1 <= numeric_ratio <= 0.9:
+                    numeric_scores.append(5)
+                else:
+                    numeric_scores.append(1)
+            else:
+                numeric_scores.append(0)
+        
+        if numeric_scores:
+            numeric_score = sum(numeric_scores) / len(numeric_scores)
+            score += min(numeric_score, 10)  # 最多10分
+        
+        # 更新最佳匹配列
+        if score > best_score:
+            best_score = score
+            best_match_col = col
+    
+    # 只有当得分足够高时才返回匹配列
+    if best_score > 30:  # 阈值可以根据需要调整
+        return best_match_col
+    
+    return None
 
 def smart_column_detection(df, filename):
     """
