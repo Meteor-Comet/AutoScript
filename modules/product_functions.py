@@ -172,3 +172,89 @@ def convert_product_quantities(df, conversion_direction, selected_products, conv
                         pass
     
     return result_df, converted_count
+
+def convert_product_quantities_manual(df, selected_products, conversion_config):
+    """
+    手动转换商品数量（支持多种单位之间的转换）
+    """
+    # 选择必要的列
+    if '货品名称' in df.columns:
+        product_col = '货品名称'
+    elif '产品名称' in df.columns:
+        product_col = '产品名称'
+    else:
+        product_col = "产品名称"  # 默认值
+
+    if '数量' in df.columns:
+        quantity_col = '数量'
+    else:
+        quantity_col = df.columns[1]  # 默认使用第二列作为数量列
+
+    if '规格' in df.columns:
+        unit_col = '规格'
+    else:
+        unit_col = "规格"  # 默认值
+    
+    source_unit = conversion_config['source_unit']
+    target_unit = conversion_config['target_unit']
+    conversion_rules = conversion_config['conversion_rules']
+    
+    # 根据目标单位添加新列
+    new_column_name = f'数量（{target_unit}）'
+    new_unit_name = target_unit
+    
+    # 找到数量列的位置
+    quantity_col_index = list(df.columns).index(quantity_col)
+    
+    # 创建新列数据
+    new_column_data = pd.to_numeric(df[quantity_col], errors='coerce').fillna(0)
+    new_unit_data = df[unit_col].copy()
+    
+    # 将新列插入到数量列后面
+    columns_list = list(df.columns)
+    columns_list.insert(quantity_col_index + 1, new_column_name)
+    columns_list.insert(quantity_col_index + 2, '规格（转换后）')
+    
+    # 重新排列DataFrame的列
+    result_df = df.reindex(columns=columns_list)
+    
+    # 填充新列数据
+    result_df[new_column_name] = new_column_data
+    result_df['规格（转换后）'] = new_unit_data
+    
+    # 执行转换
+    converted_count = 0
+    for index, row in result_df.iterrows():
+        product_name = str(row[product_col])
+
+        # 只转换选中的商品
+        if product_name in selected_products:
+            # 检查是否具有指定的源单位
+            unit_str = str(row[unit_col])
+            if source_unit in unit_str and target_unit not in unit_str:
+                # 查找匹配的转换规则
+                multiplier = None
+                for keyword, mult in conversion_rules.items():
+                    if (keyword == product_name or
+                        product_name.startswith(keyword) or
+                        product_name.endswith(keyword) or
+                        keyword in product_name):
+                        multiplier = mult
+                        break
+                
+                if multiplier and multiplier > 1:
+                    try:
+                        original_quantity = float(row[quantity_col])
+                        # 判断转换方向
+                        if target_unit == "个":  # 箱/件等 → 个
+                            converted_quantity = original_quantity * multiplier
+                        else:  # 个 → 箱/件等
+                            converted_quantity = original_quantity / multiplier
+                        
+                        result_df.at[index, new_column_name] = converted_quantity
+                        result_df.at[index, '规格（转换后）'] = new_unit_name
+                        converted_count += 1
+                    except (ValueError, TypeError):
+                        pass
+    
+    return result_df, converted_count

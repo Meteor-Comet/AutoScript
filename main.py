@@ -14,7 +14,7 @@ from modules.data_processing import (
     compare_data, mark_procurement_info, extract_direct_mail_info
 )
 from modules.ui_components import setup_page, setup_sidebar, show_footer, download_button
-from modules.product_functions import standardize_product_names, convert_product_quantities
+from modules.product_functions import standardize_product_names, convert_product_quantities, convert_product_quantities_manual
 from modules.enhanced_vlookup import enhanced_vlookup
 from modules.logistics_matching import match_logistics_info
 
@@ -1166,7 +1166,7 @@ elif app_mode == "供应商订单分析":
 
 elif app_mode == "商品数量转换":
     st.header("商品数量转换")
-    st.info("此功能支持双向转换：箱↔个，您可以选择转换方向和要转换的商品")
+    st.info("此功能支持多种单位之间的转换，您可以手动选择转换方向和目标单位")
 
     # 文件上传
     uploaded_file = st.file_uploader("上传发货明细文件", type=["xlsx"], key="convert_quantities")
@@ -1179,7 +1179,7 @@ elif app_mode == "商品数量转换":
             st.subheader("原始数据预览")
             st.dataframe(df.head(10))
 
-            # 定义转换规则 - 支持双向转换
+            # 定义转换规则 - 支持多种单位转换
             conversion_rules = {
                 "四盒装翻盖式礼盒": 30,  # 30个/箱
                 "盒装抽纸": 20,  # 20个（盒）/箱
@@ -1197,22 +1197,26 @@ elif app_mode == "商品数量转换":
                 "剃须刀便携合金电动刮胡刀男士": 1  # 单个商品
             }
 
-            # 转换方向选择
+            # 获取当前文件中的所有规格
+            unique_units = df['规格'].unique() if '规格' in df.columns else []
+            unique_units = [str(unit) for unit in unique_units if pd.notna(unit) and str(unit).strip()]
+            
+            # 转换设置
             st.subheader("转换设置")
-            col1, col2 = st.columns(2)
+            
+            # 让用户选择源单位和目标单位
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                conversion_direction = st.radio(
-                    "选择转换方向",
-                    ["箱 → 个", "个 → 箱"],
-                    help="箱→个：将箱装数量转换为个装数量\n个→箱：将个装数量转换为箱装数量"
-                )
+                source_unit = st.selectbox("选择源单位", [""] + unique_units, key="source_unit")
             
             with col2:
+                target_unit = st.selectbox("选择目标单位", ["个", "箱", "件", "条", "包", "台"], key="target_unit")
+                
+            with col3:
                 # 显示当前文件中的规格信息
-                unique_units = df['规格'].unique() if '规格' in df.columns else []
                 st.write("当前文件中的规格:")
-                st.write(unique_units.tolist())
+                st.write(unique_units)
 
             # 商品选择功能
             st.subheader("商品选择")
@@ -1252,35 +1256,19 @@ elif app_mode == "商品数量转换":
                         st.subheader("选中商品的转换规则")
                         rule_info = []
                         for product in selected_products:
-                            # 检查商品是否需要转换（根据规格）
-                            product_data = df[df[product_col] == product]
-                            needs_box_to_individual = False
-                            needs_individual_to_box = False
-                            
-                            # 检查该商品的规格
-                            for _, row in product_data.iterrows():
-                                unit_str = str(row['规格']) if '规格' in df.columns else ''
-                                if '箱' in unit_str and '个' not in unit_str:
-                                    needs_box_to_individual = True
-                                elif ('个' in unit_str or '台' in unit_str or '条' in unit_str or '包' in unit_str) and '箱' not in unit_str:
-                                    needs_individual_to_box = True
-                            
                             for keyword, multiplier in conversion_rules.items():
                                 if (keyword == product or
                                     product.startswith(keyword) or
                                     product.endswith(keyword) or
                                     keyword in product):
-                                    # 根据转换方向和实际规格显示规则
-                                    if conversion_direction == "箱 → 个":
-                                        if needs_box_to_individual:
-                                            rule_info.append(f"{product}: 1箱 = {multiplier}个")
+                                    # 根据用户选择的单位显示规则
+                                    if source_unit and target_unit:
+                                        if target_unit == "个":
+                                            rule_info.append(f"{product}: 1{source_unit} = {multiplier}{target_unit}")
+                                        elif target_unit == "箱":
+                                            rule_info.append(f"{product}: {multiplier}{source_unit} = 1{target_unit}")
                                         else:
-                                            rule_info.append(f"{product}: 无需转换（规格已为个或非箱）")
-                                    else:  # 个 → 箱
-                                        if needs_individual_to_box:
-                                            rule_info.append(f"{product}: {multiplier}个 = 1箱")
-                                        else:
-                                            rule_info.append(f"{product}: 无需转换（规格已为箱或非个）")
+                                            rule_info.append(f"{product}: 1{source_unit} = {multiplier}{target_unit} (参考)")
                                     break
                         
                         for info in rule_info:
@@ -1291,11 +1279,15 @@ elif app_mode == "商品数量转换":
                     selected_products = []
 
                 # 转换预览
-                if selected_products:
+                if selected_products and source_unit and target_unit:
                     st.subheader("转换预览")
                     
                     # 筛选出选中商品的数据
                     preview_df = df[df[product_col].isin(selected_products)].copy()
+                    
+                    # 只显示具有指定源单位的行
+                    if '规格' in df.columns:
+                        preview_df = preview_df[preview_df['规格'].astype(str).str.contains(source_unit, na=False)]
                     
                     if not preview_df.empty:
                         # 计算转换后的数量
@@ -1315,20 +1307,11 @@ elif app_mode == "商品数量转换":
                                     multiplier = mult
                                     break
                             
-                            # 检查是否需要转换
-                            need_convert = False
-                            if conversion_direction == "箱 → 个":
-                                if '箱' in str(row['规格'] if '规格' in df.columns else '') and '个' not in str(row['规格'] if '规格' in df.columns else ''):
-                                    need_convert = True
-                            elif conversion_direction == "个 → 箱":
-                                unit_str = str(row['规格'] if '规格' in df.columns else '')
-                                if ('个' in unit_str or '台' in unit_str or '条' in unit_str or '包' in unit_str) and '箱' not in unit_str:
-                                    need_convert = True
-                            
-                            if multiplier and multiplier > 1 and need_convert:
-                                if conversion_direction == "箱 → 个":
+                            if multiplier and multiplier > 1:
+                                # 根据用户选择的转换方向计算
+                                if target_unit == "个":  # 箱/件等 → 个
                                     converted_quantity = original_quantity * multiplier
-                                else:  # 个 → 箱
+                                else:  # 个 → 箱/件等
                                     converted_quantity = original_quantity / multiplier
                                 preview_df.at[index, '转换后数量'] = converted_quantity
                     
@@ -1343,40 +1326,69 @@ elif app_mode == "商品数量转换":
                     total_original = preview_df['数量' if '数量' in df.columns else df.columns[1]].sum()
                     total_converted = preview_df['转换后数量'].sum()
                     st.info(f"转换统计：原始总数 {total_original}，转换后总数 {total_converted:.2f}")
+                    
+                    # 执行转换按钮
+                    if st.button("执行数量转换"):
+                        with st.spinner("正在执行商品数量转换..."):
+                            # 创建转换规则字典以传递给转换函数
+                            conversion_config = {
+                                'source_unit': source_unit,
+                                'target_unit': target_unit,
+                                'conversion_rules': conversion_rules
+                            }
+                            
+                            result_df, converted_count = convert_product_quantities_manual(df, selected_products, conversion_config)
+                            
+                            # 显示转换结果
+                            st.success(f"商品数量转换完成！共转换了 {converted_count} 条记录")
 
-                # 执行转换按钮
-                if selected_products and st.button("执行数量转换"):
-                    with st.spinner("正在执行商品数量转换..."):
-                        result_df, converted_count = convert_product_quantities(df, conversion_direction, selected_products, conversion_rules)
-                        
-                        # 显示转换结果
-                        st.success(f"商品数量转换完成！共转换了 {converted_count} 条记录")
+                            # 显示转换后的数据预览
+                            st.subheader("转换后数据预览")
 
-                        # 显示转换后的数据预览
-                        st.subheader("转换后数据预览")
+                            # 选择要显示的列
+                            preview_columns = [product_col, '数量' if '数量' in df.columns else df.columns[1], '规格' if '规格' in df.columns else df.columns[2]]
+                            new_col_name = f'数量（{target_unit}）'
+                            if new_col_name in result_df.columns:
+                                preview_columns.append(new_col_name)
+                                preview_columns.append('规格（转换后）')
+                            if '收货人' in result_df.columns:
+                                preview_columns.insert(0, '收货人')
+                            
+                            # 只显示有转换的记录
+                            # 使用numpy数组比较来避免索引对齐问题
+                            if new_col_name in result_df.columns and '数量' in result_df.columns:
+                                # 检查列的形状以调试维度问题
+                                left_series = result_df[new_col_name].astype(float)
+                                right_series = result_df['数量'].astype(float)
+                                
+                                # 确保比较的Series是一维的
+                                if len(left_series.shape) > 1:
+                                    left_series = left_series.iloc[:, 0]  # 取第一列
+                                if len(right_series.shape) > 1:
+                                    right_series = right_series.iloc[:, 0]  # 取第一列
+                                
+                                # 使用pandas的ne方法进行逐元素比较，避免维度问题
+                                comparison_series = left_series.ne(right_series)
+                                converted_df = result_df[comparison_series]
+                                if not converted_df.empty:
+                                    st.write("已转换的记录：")
+                                    # 修复重复列名问题 - 处理DataFrame中的重复列
+                                    converted_df = converted_df.loc[:, ~converted_df.columns.duplicated()]
+                                    # 修复preview_columns中的重复列名
+                                    unique_preview_columns = []
+                                    for col in preview_columns:
+                                        if col not in unique_preview_columns:
+                                            unique_preview_columns.append(col)
+                                    st.dataframe(converted_df[unique_preview_columns].head(20))
+                                else:
+                                    st.info("没有记录被转换，请检查选择的条件")
 
-                        # 选择要显示的列
-                        preview_columns = [product_col, '数量' if '数量' in df.columns else df.columns[1], '规格' if '规格' in df.columns else df.columns[2]]
-                        new_col_name = '数量（个）' if conversion_direction == "箱 → 个" else '数量（箱）'
-                        if new_col_name in result_df.columns:
-                            preview_columns.append(new_col_name)
-                            preview_columns.append('规格（转换后）')
-                        if '收货人' in result_df.columns:
-                            preview_columns.insert(0, '收货人')
-                        
-                        # 只显示有转换的记录
-                        # 使用numpy数组比较来避免索引对齐问题
-                        if new_col_name in result_df.columns and '数量' in result_df.columns:
-                            converted_mask = result_df[new_col_name].values != result_df['数量'].values
-                            converted_df = result_df[converted_mask]
-                            if not converted_df.empty:
-                                st.write("已转换的记录：")
-                                st.dataframe(converted_df[preview_columns].head(20))
-                            else:
-                                st.info("没有记录被转换，请检查选择的条件")
-
-                        # 提供下载
-                        download_button(result_df, "转换后发货明细")
+                            # 提供下载
+                            download_button(result_df, "转换后发货明细")
+                elif source_unit and target_unit:
+                    st.info("请选择要转换的商品")
+                else:
+                    st.info("请选择源单位和目标单位")
             else:
                 st.warning("未找到合适的商品列，请确保数据中包含'货品名称'或'产品名称'列")
         except Exception as e:
