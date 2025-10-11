@@ -76,7 +76,7 @@ if app_mode == "批量处理发放明细":
 
 elif app_mode == "核对发放明细与供应商订单":
     st.header("核对发放明细与供应商订单")
-    st.info("此功能用于核对供应商订单中怡亚通的数据与发放明细是否一致")
+    st.info("此功能用于核对供应商订单中怡亚通的数据与发放明细是否一致，并标记集采信息")
     
     col1, col2 = st.columns(2)
     
@@ -96,8 +96,13 @@ elif app_mode == "核对发放明细与供应商订单":
         )
     
     if delivery_file and order_files:
-        if st.button("开始核对"):
-            with st.spinner("正在核对数据..."):
+        # 添加选项让用户选择要执行的操作
+        st.subheader("选择操作")
+        perform_verification = st.checkbox("核对发放明细与供应商订单", value=True)
+        perform_procurement_marking = st.checkbox("标记集采信息", value=True)
+        
+        if st.button("开始处理"):
+            with st.spinner("正在处理数据..."):
                 # 保存上传的文件到临时目录
                 with tempfile.TemporaryDirectory() as temp_dir:
                     # 保存发货明细文件
@@ -135,126 +140,91 @@ elif app_mode == "核对发放明细与供应商订单":
                         供应商订单_df = pd.concat(all_orders, ignore_index=True)
                         st.info(f"合并订单数据，共 {len(供应商订单_df)} 行")
                         
-                        # 进行数据核对
-                        consistent_records, inconsistent_records, not_found_records, _ = compare_data(发货明细_df, 供应商订单_df)
+                        # 初始化结果DataFrame
+                        final_result = 发货明细_df.copy()
                         
-                        # 显示核对结果
-                        st.success("数据核对完成！")
+                        # 执行核对操作
+                        if perform_verification:
+                            # 进行数据核对
+                            consistent_records, inconsistent_records, not_found_records, _ = compare_data(发货明细_df, 供应商订单_df)
+                            
+                            # 显示核对结果
+                            st.success("数据核对完成！")
+                            
+                            # 显示一致的记录
+                            if not consistent_records.empty:
+                                st.subheader("数量一致的记录")
+                                st.dataframe(consistent_records)
+                                st.success(f"发现 {len(consistent_records)} 条数量一致的记录")
+                            
+                            # 显示数量不一致的记录
+                            if not inconsistent_records.empty:
+                                st.subheader("数量不一致的记录")
+                                st.dataframe(inconsistent_records)
+                                st.warning(f"发现 {len(inconsistent_records)} 条数量不一致的记录")
+                            
+                            # 显示发放明细中未找到的记录
+                            if not not_found_records.empty:
+                                st.subheader("发放明细中未找到的记录")
+                                st.dataframe(not_found_records)
+                                st.error(f"发现 {len(not_found_records)} 条发放明细中未找到的记录")
+                            
+                            # 统计信息
+                            total_records = len(consistent_records) + len(inconsistent_records) + len(not_found_records)
+                            consistent_count = len(consistent_records)
+                            st.info(f"总共核对 {total_records} 条供应商订单记录")
+                            st.info(f"  - 数量一致: {consistent_count} 条")
+                            st.info(f"  - 数量不一致: {len(inconsistent_records)} 条")
+                            st.info(f"  - 发放明细中未找到: {len(not_found_records)} 条")
                         
-                        # 显示一致的记录
-                        if not consistent_records.empty:
-                            st.subheader("数量一致的记录")
-                            st.dataframe(consistent_records)
-                            st.success(f"发现 {len(consistent_records)} 条数量一致的记录")
-                        
-                        # 显示数量不一致的记录
-                        if not inconsistent_records.empty:
-                            st.subheader("数量不一致的记录")
-                            st.dataframe(inconsistent_records)
-                            st.warning(f"发现 {len(inconsistent_records)} 条数量不一致的记录")
-                        
-                        # 显示发放明细中未找到的记录
-                        if not not_found_records.empty:
-                            st.subheader("发放明细中未找到的记录")
-                            st.dataframe(not_found_records)
-                            st.error(f"发现 {len(not_found_records)} 条发放明细中未找到的记录")
-                        
-                        # 统计信息
-                        total_records = len(consistent_records) + len(inconsistent_records) + len(not_found_records)
-                        consistent_count = len(consistent_records)
-                        st.info(f"总共核对 {total_records} 条供应商订单记录")
-                        st.info(f"  - 数量一致: {consistent_count} 条")
-                        st.info(f"  - 数量不一致: {len(inconsistent_records)} 条")
-                        st.info(f"  - 发放明细中未找到: {len(not_found_records)} 条")
+                        # 执行集采标记操作
+                        if perform_procurement_marking:
+                            # 标记集采信息
+                            marked_df = mark_procurement_info(发货明细_df, 供应商订单_df)
+                            
+                            if marked_df is not None:
+                                final_result = marked_df
+                                st.success("集采信息标记完成！")
+                                
+                                # 显示标记结果统计
+                                procurement_stats = marked_df['是否集采'].value_counts()
+                                st.subheader("集采标记统计")
+                                st.write("注意：空白表示发放明细中有但供应商订单中没有的记录")
+                                st.write(procurement_stats)
+                                
+                                # 单独统计空白数量
+                                blank_count = len(marked_df[marked_df['是否集采'] == ''])
+                                if blank_count > 0:
+                                    st.info(f"共有 {blank_count} 行记录在供应商订单中未找到对应信息（显示为空白）")
+                                
+                                # 显示详细的集采和非集采数据预览
+                                st.subheader("集采标记详情")
+                                
+                                # 显示集采记录
+                                procurement_records = marked_df[marked_df['是否集采'] == '集采']
+                                if not procurement_records.empty:
+                                    st.write("集采记录:")
+                                    st.dataframe(procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                
+                                # 显示非集采记录
+                                non_procurement_records = marked_df[marked_df['是否集采'] == '非集采']
+                                if not non_procurement_records.empty:
+                                    st.write("非集采记录:")
+                                    st.dataframe(non_procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                
+                                # 显示未找到对应信息的记录
+                                blank_records = marked_df[marked_df['是否集采'] == '']
+                                if not blank_records.empty:
+                                    st.write("未在供应商订单中找到的记录:")
+                                    st.dataframe(blank_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                
+                                # 显示部分标记结果
+                                st.subheader("标记结果预览")
+                                preview_df = marked_df[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20)
+                                st.dataframe(preview_df)
                         
                         # 提供下载
-                        combined_result = pd.concat([consistent_records, inconsistent_records, not_found_records], ignore_index=True)
-                        download_button(combined_result, "核对结果")
-
-elif app_mode == "标记发放明细集采信息":
-    st.header("标记发放明细集采信息")
-    st.info("此功能根据供应商订单中的'一件代发'字段标记发放明细的'是否集采'列")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        delivery_file = st.file_uploader(
-            "上传发放明细文件",
-            type=["xlsx"],
-            key="delivery_file_procurement"
-        )
-    
-    with col2:
-        order_files = st.file_uploader(
-            "上传供应商订单文件（支持多个）",
-            type=["xlsx"],
-            accept_multiple_files=True,
-            key="order_files_procurement"
-        )
-    
-    if delivery_file and order_files:
-        if st.button("开始标记"):
-            with st.spinner("正在标记集采信息..."):
-                # 保存上传的文件到临时目录
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    # 保存发货明细文件
-                    delivery_path = os.path.join(temp_dir, delivery_file.name)
-                    with open(delivery_path, "wb") as f:
-                        f.write(delivery_file.getbuffer())
-                    
-                    # 读取发货明细
-                    try:
-                        发货明细_df = pd.read_excel(delivery_path)
-                        st.info(f"读取发放明细文件，共 {len(发货明细_df)} 行数据")
-                    except Exception as e:
-                        st.error(f"读取发放明细文件时出错: {e}")
-                        st.stop()
-                    
-                    # 保存供应商订单文件
-                    order_file_paths = []
-                    for uploaded_file in order_files:
-                        file_path = os.path.join(temp_dir, uploaded_file.name)
-                        with open(file_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        order_file_paths.append(file_path)
-                    
-                    # 处理所有供应商订单文件
-                    all_orders = []
-                    for file_path in order_file_paths:
-                        with st.spinner(f"正在处理 {os.path.basename(file_path)}..."):
-                            df = process_supplier_order_file(file_path)
-                            if df is not None:
-                                all_orders.append(df)
-                                st.success(f"成功处理 {os.path.basename(file_path)}")
-                    
-                    if all_orders:
-                        # 合并所有订单数据
-                        供应商订单_df = pd.concat(all_orders, ignore_index=True)
-                        st.info(f"合并订单数据，共 {len(供应商订单_df)} 行")
-                        
-                        # 标记集采信息
-                        marked_df = mark_procurement_info(发货明细_df, 供应商订单_df)
-                        
-                        if marked_df is not None:
-                            st.success("集采信息标记完成！")
-                            
-                            # 显示标记结果统计（包含空白的说明）
-                            procurement_stats = marked_df['是否集采'].value_counts()
-                            st.subheader("集采标记统计")
-                            st.write("注意：空白表示发放明细中有但供应商订单中没有的记录")
-                            st.write(procurement_stats)
-                            # 单独统计空白数量
-                            blank_count = len(marked_df[marked_df['是否集采'] == ''])
-                            if blank_count > 0:
-                                st.info(f"共有 {blank_count} 行记录在供应商订单中未找到对应信息（显示为空白）")
-                            
-                            # 显示部分标记结果
-                            st.subheader("标记结果预览")
-                            preview_df = marked_df[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20)
-                            st.dataframe(preview_df)
-                            
-                            # 提供下载
-                            download_button(marked_df, "发货明细_含集采信息")
+                        download_button(final_result, "处理结果")
 
 elif app_mode == "导入明细到导单模板":
     st.header("导入明细到导单模板")
