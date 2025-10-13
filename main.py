@@ -228,21 +228,17 @@ elif app_mode == "核对发放明细与供应商订单":
 
 elif app_mode == "导入明细到导单模板":
     st.header("导入明细到导单模板")
-    st.info("请按步骤操作：1.上传导单模板 2.上传明细文件并选择列映射")
+    st.info("请按步骤操作：1.上传导单模板 2.上传系统导出待发货明细文件")
     
     # 初始化session state
     if 'processed_data_list' not in st.session_state:
         st.session_state.processed_data_list = []
     if 'show_import_success' not in st.session_state:
         st.session_state.show_import_success = False
-    if 'selected_product' not in st.session_state:
-        st.session_state.selected_product = ""
-    if 'product_quantity' not in st.session_state:
-        st.session_state.product_quantity = 1
     if 'download_triggered' not in st.session_state:
         st.session_state.download_triggered = False
     
-    # 步骤1：上传三择导单
+    # 步骤1：上传三择导单模板
     sanze_file = st.file_uploader("1. 上传导单模板文件", type=["xlsx"], key="sanze_file")
     
     if sanze_file:
@@ -256,22 +252,18 @@ elif app_mode == "导入明细到导单模板":
             sanze_df = pd.read_excel(tmp_file_path)
             st.success(f"导单模板已加载（共{len(sanze_df)}行）")
             
-            # 确保有客户备注列和货品名称、数量列
-            if '客户备注' not in sanze_df.columns:
-                sanze_df['客户备注'] = ''
-            if '货品名称' not in sanze_df.columns:
-                sanze_df['货品名称'] = ''
-            if '数量' not in sanze_df.columns:
-                sanze_df['数量'] = ''
-            if '规格' not in sanze_df.columns:
-                sanze_df['规格'] = ''
+            # 确保必要的列存在
+            required_columns = ['客户备注', '货品名称', '数量', '规格', '网店订单号']
+            for col in required_columns:
+                if col not in sanze_df.columns:
+                    sanze_df[col] = ''
             
-            # 步骤2：处理直邮文件
-            st.subheader("2. 处理直邮明细文件")
+            # 步骤2：处理系统导出待发货明细文件
+            st.subheader("2. 处理系统导出待发货明细文件")
             uploaded_file = st.file_uploader(
-                "上传直邮明细文件", 
+                "上传系统导出待发货明细文件", 
                 type=["xlsx"],
-                key="direct_mail_current"
+                key="system_export_file"
             )
             
             if uploaded_file:
@@ -279,7 +271,7 @@ elif app_mode == "导入明细到导单模板":
                 st.subheader("3. 选择列名所在行")
                 header_option = st.radio(
                     "请选择列名所在的行（查看下面的预览来确定）",
-                    options=[0, 1],
+                    options=[0, 1, 2],
                     format_func=lambda x: f"第{x+1}行",
                     key="header_option"
                 )
@@ -292,241 +284,252 @@ elif app_mode == "导入明细到导单模板":
                 # 根据用户选择的列名行重新读取数据
                 df = pd.read_excel(uploaded_file, header=header_option)
                 
+                # 处理订单号跨行情况（向前填充）
+                df = df.fillna(method='ffill')
+                
                 st.write(f"使用第{header_option+1}行作为列名后的数据预览:")
                 st.dataframe(df.head(5))
                 
-                # 步骤4：自动识别商品信息
-                st.subheader("4. 商品信息识别")
+                # 步骤4：自动识别关键列
+                st.subheader("4. 关键列识别")
                 
-                # 使用优化的方法识别商品列
-                # 这里需要导入智能识别函数
-                from modules.column_detection import identify_product_column_by_content
+                # 定义可能的列名
+                order_id_cols = ['订单行编号']
+                name_cols = ['收件人', '收货人', '姓名', '客户姓名']
+                phone_cols = ['联系方式', '手机', '电话', '联系电话']
+                address_cols = ['送货地址', '收货地址', '地址']
+                product_cols = ['商品信息', '货品名称', '产品名称', '商品名称']
+                quantity_cols = ['数量', '订购数量', '购买数量']
                 
-                product_col = identify_product_column_by_content(df, product_list)
+                # 自动检测各关键列
+                detected_columns = {}
+                column_mapping = {
+                    '订单编号': order_id_cols,
+                    '收件人': name_cols,
+                    '联系方式': phone_cols,
+                    '送货地址': address_cols,
+                    '商品信息': product_cols,
+                    '数量': quantity_cols
+                }
                 
-                # 如果无法通过内容识别，回退到原来的列名匹配方法
-                if not product_col:
-                    product_columns = [col for col in df.columns if '商品' in col or '货品' in col or '产品' in col or '名称' in col]
-                    if product_columns:
-                        product_col = product_columns[0]  # 选择第一个找到的商品列
+                for target_col, possible_names in column_mapping.items():
+                    detected_col = None
+                    for col in df.columns:
+                        if col in possible_names:
+                            detected_col = col
+                            break
+                        # 检查是否包含关键词
+                        for name in possible_names:
+                            if name in str(col):
+                                detected_col = col
+                                break
+                        if detected_col:
+                            break
+                    detected_columns[target_col] = detected_col
                 
-                # 获取所有唯一的商品名称
-                auto_detected_products = []
-                standardized_mapping = {}  # 初始化标准化映射
+                # 显示检测结果并允许用户修正
+                st.write("自动检测到的列:")
+                cols = st.columns(3)
+                user_column_mapping = {}
                 
-                if product_col:
-                    # 对识别出的商品名称进行标准化处理
-                    raw_products = df[product_col].dropna().unique()
-                    raw_products = [str(p) for p in raw_products if str(p).strip()]
+                for i, (target_col, detected_col) in enumerate(detected_columns.items()):
+                    with cols[i % 3]:
+                        selected_col = st.selectbox(
+                            f"{target_col}列",
+                            options=[''] + list(df.columns),
+                            index=df.columns.tolist().index(detected_col) + 1 if detected_col in df.columns else 0,
+                            key=f"col_mapping_{target_col}"
+                        )
+                        user_column_mapping[target_col] = selected_col
+                
+                # 步骤5：商品过滤设置
+                st.subheader("5. 商品过滤设置")
+                st.info("系统将自动过滤只保留标准商品列表中的商品，用户可自定义过滤规则")
+                
+                # 商品过滤选项
+                filter_products = st.checkbox("仅保留标准商品列表中的商品", value=True)
+                
+                # 步骤6：规格处理设置
+                st.subheader("6. 规格处理设置")
+                st.info("系统根据商品类型自动设置默认规格：数据线为'条'，抽纸、湿纸巾、简易封套为'箱'，其他为'个'")
+                
+                # 定义商品规格映射规则
+                product_spec_mapping = {
+                    "数据线三合一充电线100W": "条",
+                    "抽纸": "箱",
+                    "湿纸巾": "箱",
+                    "简易封套": "箱"
+                }
+                
+                # 定义转换规则
+                conversion_rules = {
+                    "四盒装翻盖式礼盒": 30,  # 30个/箱
+                    "盒装抽纸": 20,  # 20个（盒）/箱
+                    "天叶叁毫克": 100,  # 100个/箱
+                    "抽纸": 20,  # 20个（盒）/箱
+                    "环保塑料袋": 300,  # 300个/箱
+                    "两盒装翻盖式礼盒": 30,  # 30个/箱
+                    "湿纸巾": 50,  # 50个（包）/箱
+                    "四盒装简易封套（天叶品系）": 50,  # 50个/箱
+                    "五盒装简易封套（常规款）": 50,  # 50个/箱
+                    "五盒装简易封套（细支款）": 50,  # 50个/箱
+                    "五盒装简易封套（中支款）": 50,  # 50个/箱
+                    "除螨仪": 1,  # 单个商品，不需要转换倍数
+                    "数据线三合一充电线100W": 1,  # 单个商品
+                    "剃须刀便携合金电动刮胡刀男士": 1  # 单个商品
+                }
+                
+                # 规格转换选项
+                perform_conversion = st.checkbox("是否需要进行规格转换（个→箱）", value=False)
+                
+                target_unit = None
+                selected_products_for_conversion = []
+                
+                if perform_conversion:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        target_unit = st.selectbox("目标单位", ["箱", "条"], index=0)
                     
-                    # 应用商品名称标准化逻辑
-                    for product in raw_products:
-                        # 使用与"商品名称标准化"功能相同的逻辑
-                        matched = False
-                        # 检查特殊映射规则
-                        special_mappings = {
-                            "硬盒纸抽（130抽）（250506）": "黄金葉  盒装抽纸  （计价单位：盒） 国产定制",
-                            "湿巾（10片/包）（250506）": "黄金葉 湿纸巾 10片/包 （计价单位：包） 国产定制"
-                        }
+                    # 获取文件中的唯一商品
+                    product_col_key = user_column_mapping.get('商品信息')
+                    if product_col_key and product_col_key in df.columns:
+                        unique_products = df[product_col_key].dropna().unique()
+                        unique_products = [str(p) for p in unique_products if str(p).strip()]
                         
-                        if product in special_mappings:
-                            standardized_mapping[product] = special_mappings[product]
-                            matched = True
-                        
-                        # 检查关键词匹配
-                        if not matched:
-                            keyword_mappings = {
-                                "除螨仪": "奥克斯（AUX） 除螨仪 90W （计价单位：台）",
-                                "抽": "国产定制 黄金葉  盒装抽纸  （计价单位：盒）",
-                                "塑料袋": "国产定制 黄金葉 环保塑料袋  50个/捆 300个/箱 （计价单位：个）",
-                                "两盒装翻盖式礼盒": "国产定制 黄金葉 两盒装翻盖式礼盒 30个/箱 （计价单位：个）",
-                                "湿纸巾": "国产定制 黄金葉 湿纸巾 10片/包 （计价单位：包）",
-                                "四盒装翻盖式礼盒": "国产定制 黄金葉 四盒装翻盖式礼盒 30个/箱 （计价单位：个）",
-                                "四盒装简易封套（天叶品系）": "国产定制 黄金葉 四盒装简易封套（天叶品系） 50个/箱 （计价单位：个）",
-                                "天叶叁毫克": "国产定制 黄金葉 天叶叁毫克   两条装纸袋 （计价单位：个）",
-                                "五盒装简易封套（常规款）": "国产定制 黄金葉 五盒装简易封套（常规款） 50个/箱 （计价单位：个）",
-                                "五盒装简易封套（细支款）": "国产定制 黄金葉 五盒装简易封套（细支款） 50个/箱 （计价单位：个）",
-                                "五盒装简易封套（中支款）": "国产定制 黄金葉 五盒装简易封套（中支款） 50个/箱 （计价单位：个）",
-                                "数据线三合一充电线100W": "品胜（PISEN） 数据线三合一充电线100W  一拖三 （计价单位：条）",
-                                "剃须刀": "有色 剃须刀便携合金电动刮胡刀男士  MINI 2.0 （计价单位：个） 颜色随机"
-                            }
-                            
-                            for keyword, standard_name in keyword_mappings.items():
-                                if keyword in product:
-                                    standardized_mapping[product] = standard_name
-                                    matched = True
+                        # 筛选出有转换规则的商品
+                        products_with_rules = []
+                        for product in unique_products:
+                            for keyword in conversion_rules.keys():
+                                if (keyword == product or
+                                    product.startswith(keyword) or
+                                    product.endswith(keyword) or
+                                    keyword in product):
+                                    products_with_rules.append(product)
                                     break
                         
-                        # 使用模糊匹配作为最后手段
-                        if not matched:
-                            import difflib
-                            matches = difflib.get_close_matches(product, product_list, n=1, cutoff=0.6)
-                            if matches:
-                                standardized_mapping[product] = matches[0]
-                            else:
-                                # 保持原名称
-                                standardized_mapping[product] = product
-                    
-                    # 应用标准化映射
-                    auto_detected_products = list(standardized_mapping.values())
-                
-                # 显示自动识别结果
-                if auto_detected_products:
-                    st.success(f"已自动识别到 {len(auto_detected_products)} 种商品:")
-                    for i, product in enumerate(auto_detected_products):
-                        st.write(f"{i+1}. {product}")
-                    
-                    # 提供选项让用户选择是否使用自动识别的商品信息
-                    use_auto_detection = st.checkbox("使用自动识别的商品信息", value=True)
-                    
-                    if use_auto_detection:
-                        # 使用自动识别的商品信息
-                        selected_products = auto_detected_products
-                        # 尝试查找规格和数量列
-                        spec_columns = [col for col in df.columns if '规格' in col]
-                        quantity_columns = [col for col in df.columns if '数量' in col]
-                        spec_col = spec_columns[0] if spec_columns else None
-                        quantity_col = quantity_columns[0] if quantity_columns else None
+                        products_with_rules = list(set(products_with_rules))  # 去重
                         
-                        # 为每种商品获取规格和数量信息
-                        product_info = {}
-                        for product in selected_products:
-                            # 找到该商品的第一行数据
-                            # 使用标准化前的名称进行查找
-                            original_product_name = next((k for k, v in standardized_mapping.items() if v == product), product)
-                            product_rows = df[df[product_col].astype(str) == original_product_name]
-                            if not product_rows.empty:
-                                first_row = product_rows.iloc[0]
-                                # 获取规格信息
-                                spec = ""
-                                if spec_col and spec_col in df.columns:
-                                    spec_value = first_row[spec_col]
-                                    spec = str(spec_value) if pd.notna(spec_value) else ""
-                                    # 如果规格为空，默认为"个"
-                                    if not spec.strip():
-                                        spec = "个"
-                                
-                                # 获取数量信息
-                                quantity = 1
-                                if quantity_col and quantity_col in df.columns:
-                                    try:
-                                        quantity_value = first_row[quantity_col]
-                                        quantity = int(quantity_value) if pd.notna(quantity_value) else 1
-                                    except:
-                                        quantity = 1
-                                
-                                product_info[product] = {
-                                    'spec': spec,
-                                    'quantity': quantity
-                                }
-                            else:
-                                product_info[product] = {
-                                    'spec': '个',
-                                    'quantity': 1
-                                }
-                        
-                        st.info("商品规格和数量信息（用于导单模板）:")
-                        for product in selected_products:
-                            info = product_info[product]
-                            st.write(f"- {product}: 规格={info['spec']}, 数量={info['quantity']}")
-                    else:
-                        # 用户选择手动输入商品信息
-                        selected_product = st.selectbox("选择商品", [""] + product_list, 
-                                                      index=product_list.index(st.session_state.selected_product) + 1 
-                                                      if st.session_state.selected_product in product_list else 0,
-                                                      key="product_selector")
-                        st.session_state.selected_product = selected_product
-                        
-                        product_quantity = st.number_input("数量", min_value=1, value=st.session_state.product_quantity, key="quantity_selector")
-                        st.session_state.product_quantity = product_quantity
-                else:
-                    st.warning("未检测到商品信息，请手动选择")
-                    # 商品选择界面（只能选择一个商品）
-                    selected_product = st.selectbox("选择商品", [""] + product_list, 
-                                                  index=product_list.index(st.session_state.selected_product) + 1 
-                                                  if st.session_state.selected_product in product_list else 0,
-                                                  key="product_selector")
-                    st.session_state.selected_product = selected_product
-                    
-                    product_quantity = st.number_input("数量", min_value=1, value=st.session_state.product_quantity, key="quantity_selector")
-                    st.session_state.product_quantity = product_quantity
-                
-                # 步骤5：选择对应列（保持原版）
-                st.subheader("5. 请选择对应列")
-                cols = st.columns(2)
-                with cols[0]:
-                    name_col = st.selectbox("收货人列", df.columns, key="name_col")
-                    phone_col = st.selectbox("电话列", df.columns, key="phone_col")
-                with cols[1]:
-                    address_col = st.selectbox("地址列", df.columns, key="address_col")
-                    shop_col = st.selectbox("店名列", df.columns, key="shop_col")
+                        if products_with_rules:
+                            with col2:
+                                selected_products_for_conversion = st.multiselect(
+                                    "选择需要转换规格的商品",
+                                    products_with_rules,
+                                    default=products_with_rules,
+                                    key="products_to_convert"
+                                )
                 
                 # 处理按钮
                 if st.button("处理当前文件"):
-                    processed = []
-                    # 判断是否使用自动识别的商品信息
-                    if 'use_auto_detection' in locals() and use_auto_detection and auto_detected_products:
-                        # 使用自动识别的商品信息处理每一行
-                        for _, row in df.iterrows():
-                            product_name = str(row[product_col]) if product_col in df.columns and pd.notna(row[product_col]) else ""
-                            # 使用标准化后的商品名称
-                            standardized_product_name = standardized_mapping.get(product_name, product_name)
-                            if standardized_product_name in product_info:
-                                info = product_info[product_name]
-                                item = {
-                                    '收货人': str(row[name_col]).strip() if pd.notna(row[name_col]) else '',
-                                    '手机': str(row[phone_col]).strip() if pd.notna(row[phone_col]) else '',
-                                    '收货地址': str(row[address_col]).strip() if pd.notna(row[address_col]) else '',
-                                    '客户备注': str(row[shop_col]).strip() if pd.notna(row[shop_col]) else '',
-                                    '商品名称': standardized_product_name,
-                                    '商品数量': info['quantity'],
-                                    '规格': info['spec']
-                                }
-                                if item['收货人'] or item['手机']:
-                                    processed.append(item)
+                    # 检查必要列是否已选择
+                    required_fields = ['收件人', '联系方式', '送货地址', '商品信息', '数量']
+                    missing_fields = [field for field in required_fields if not user_column_mapping.get(field)]
+                    
+                    if missing_fields:
+                        st.error(f"请先选择以下必要列: {', '.join(missing_fields)}")
                     else:
-                        # 使用手动选择的商品信息
+                        processed = []
+                        conversion_count = 0
+                        filtered_count = 0
+                        
+                        # 处理每一行数据
                         for _, row in df.iterrows():
+                            # 提取基本信息
                             item = {
-                                '收货人': str(row[name_col]).strip() if pd.notna(row[name_col]) else '',
-                                '手机': str(row[phone_col]).strip() if pd.notna(row[phone_col]) else '',
-                                '收货地址': str(row[address_col]).strip() if pd.notna(row[address_col]) else '',
-                                '客户备注': str(row[shop_col]).strip() if pd.notna(row[shop_col]) else '',
-                                '商品名称': selected_product if 'selected_product' in locals() else st.session_state.selected_product,
-                                '商品数量': product_quantity if 'product_quantity' in locals() else st.session_state.product_quantity
+                                '订单编号': str(row[user_column_mapping['订单编号']]).strip() if user_column_mapping['订单编号'] and pd.notna(row[user_column_mapping['订单编号']]) else '',
+                                '收件人': str(row[user_column_mapping['收件人']]).strip() if pd.notna(row[user_column_mapping['收件人']]) else '',
+                                '联系方式': str(row[user_column_mapping['联系方式']]).strip() if pd.notna(row[user_column_mapping['联系方式']]) else '',
+                                '送货地址': str(row[user_column_mapping['送货地址']]).strip() if pd.notna(row[user_column_mapping['送货地址']]) else '',
+                                '商品信息': str(row[user_column_mapping['商品信息']]).strip() if pd.notna(row[user_column_mapping['商品信息']]) else '',
+                                '数量': row[user_column_mapping['数量']] if pd.notna(row[user_column_mapping['数量']]) else 0
                             }
-                            if item['收货人'] or item['手机']:
+                            
+                            # 只处理有收件人或联系方式的行
+                            if item['收件人'] or item['联系方式']:
+                                # 商品过滤
+                                if filter_products:
+                                    # 检查商品是否在标准商品列表中
+                                    is_valid_product = False
+                                    for standard_product in product_list:
+                                        # 使用模糊匹配检查商品是否在标准列表中
+                                        if (item['商品信息'] == standard_product or 
+                                            item['商品信息'] in standard_product or 
+                                            standard_product in item['商品信息']):
+                                            is_valid_product = True
+                                            break
+                                    
+                                    # 如果不在标准商品列表中，跳过该行
+                                    if not is_valid_product:
+                                        filtered_count += 1
+                                        continue
+                                
+                                # 设置默认规格
+                                # 数据线规格为条，抽纸、纸、简易封套为箱，其他为个
+                                if "数据线" in item['商品信息']:
+                                    default_spec = '条'
+                                elif any(keyword in item['商品信息'] for keyword in ['抽纸', '湿纸巾', '简易封套']):
+                                    default_spec = '箱'
+                                else:
+                                    default_spec = '个'
+                                
+                                # 处理规格转换
+                                original_quantity = float(item['数量']) if item['数量'] else 0
+                                final_quantity = original_quantity
+                                final_spec = default_spec  # 使用默认规格
+                                
+                                # 如果需要进行规格转换
+                                if perform_conversion and target_unit and item['商品信息'] in selected_products_for_conversion:
+                                    # 查找匹配的转换规则
+                                    multiplier = None
+                                    for keyword, mult in conversion_rules.items():
+                                        if (keyword == item['商品信息'] or
+                                            item['商品信息'].startswith(keyword) or
+                                            item['商品信息'].endswith(keyword) or
+                                            keyword in item['商品信息']):
+                                            multiplier = mult
+                                            break
+                                    
+                                    if multiplier and multiplier > 1:
+                                        # 进行转换：个 → 箱/条等
+                                        final_quantity = original_quantity / multiplier
+                                        final_spec = target_unit
+                                        conversion_count += 1
+                                
+                                # 更新数量和规格
+                                item['数量'] = final_quantity
+                                item['规格'] = final_spec
+                                
                                 processed.append(item)
-                    
-                    # 将当前处理的文件数据添加到列表中
-                    st.session_state.processed_data_list.append({
-                        'filename': uploaded_file.name,
-                        'data': processed
-                    })
-                    st.session_state.show_import_success = False
-                    st.session_state.download_triggered = False
-                    st.success(f"成功处理{len(processed)}行数据")
-                    
-                    # 创建一个安全的DataFrame用于显示
-                    display_data = []
-                    for item in processed[:10]:  # 只显示前10行
-                        display_item = {
-                            '收货人': item['收货人'],
-                            '手机': item['手机'],
-                            '收货地址': item['收货地址'],
-                            '客户备注': item['客户备注'],
-                            '商品名称': item['商品名称'],
-                            '商品数量': item['商品数量']
-                        }
-                        if '规格' in item:
-                            display_item['规格'] = item['规格']
-                        display_data.append(display_item)
-                    
-                    display_df = pd.DataFrame(display_data)
-                    # 确保所有列都是字符串类型，避免PyArrow错误
-                    for col in display_df.columns:
-                        display_df[col] = display_df[col].astype(str)
-                    st.dataframe(display_df)
+                        
+                        # 将当前处理的文件数据添加到列表中
+                        st.session_state.processed_data_list.append({
+                            'filename': uploaded_file.name,
+                            'data': processed
+                        })
+                        st.session_state.show_import_success = False
+                        st.session_state.download_triggered = False
+                        
+                        st.success(f"成功处理{len(processed)}行数据，其中{filtered_count}行被过滤，{conversion_count}行进行了规格转换")
+                        
+                        # 显示处理结果预览
+                        if processed:
+                            display_data = []
+                            for item in processed[:10]:  # 只显示前10行
+                                display_item = {
+                                    '订单编号': item['订单编号'],
+                                    '收件人': item['收件人'],
+                                    '联系方式': item['联系方式'],
+                                    '送货地址': item['送货地址'],
+                                    '商品信息': item['商品信息'],
+                                    '数量': item['数量'],
+                                    '规格': item['规格']
+                                }
+                                display_data.append(display_item)
+                            
+                            display_df = pd.DataFrame(display_data)
+                            # 确保所有列都是字符串类型，避免PyArrow错误
+                            for col in display_df.columns:
+                                display_df[col] = display_df[col].astype(str)
+                            st.dataframe(display_df)
                 
                 # 显示已处理的文件列表和导入按钮
                 if st.session_state.processed_data_list:
@@ -540,18 +543,17 @@ elif app_mode == "导入明细到导单模板":
                         for processed_item in st.session_state.processed_data_list:
                             processed_data = processed_item['data']
                             for item in processed_data:
+                                # 创建新行，只填写必要的列
                                 new_row = {col: '' for col in sanze_df.columns}
                                 new_row.update({
-                                    '收货人': item['收货人'],
-                                    '手机': item['手机'],
-                                    '收货地址': item['收货地址'],
-                                    '客户备注': item['客户备注'],
-                                    '货品名称': item['商品名称'],
-                                    '数量': item['商品数量']
+                                    '网店订单号': item['订单编号'],  # 明细文件的订单编号对应导单的网店订单号
+                                    '收货人': item['收件人'],
+                                    '手机': item['联系方式'],
+                                    '收货地址': item['送货地址'],
+                                    '货品名称': item['商品信息'],
+                                    '数量': item['数量'],
+                                    '规格': item['规格']
                                 })
-                                # 如果有规格信息，也添加到导单中
-                                if '规格' in item:
-                                    new_row['规格'] = item['规格']
                                 sanze_df.loc[len(sanze_df)] = new_row
                                 total_imported += 1
                         
@@ -572,8 +574,6 @@ elif app_mode == "导入明细到导单模板":
                     if st.button("清空已处理文件列表并开始下一轮导入"):
                         st.session_state.processed_data_list = []
                         st.session_state.show_import_success = False
-                        st.session_state.selected_product = ""
-                        st.session_state.product_quantity = 1
                         st.session_state.download_triggered = False
                         st.rerun()
                         
