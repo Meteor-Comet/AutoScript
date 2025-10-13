@@ -8,7 +8,7 @@ import tempfile
 import shutil
 
 # 导入模块
-from modules.column_detection import smart_column_detection
+from modules.column_detection import smart_column_detection, find_best_header_row
 from modules.data_processing import (
     batch_process_files, process_supplier_order_file, 
     compare_data, mark_procurement_info, extract_direct_mail_info
@@ -643,11 +643,53 @@ elif app_mode == "增强版VLOOKUP":
     with col2:
         reference_file = st.file_uploader("上传参考表文件", type=["xlsx"], key="reference_file")
     
+    # 添加自动检测表头行的变量
+    main_header_option = None
+    reference_header_option = None
+    
+    if main_file:
+        # 读取前3行数据用于预览
+        main_preview_df = pd.read_excel(main_file, header=None, nrows=3)
+        st.subheader("主表数据预览")
+        st.write("前三行数据（用于确定列名所在行）:")
+        st.dataframe(main_preview_df)
+        
+        # 自动检测最佳表头行
+        best_main_header = find_best_header_row(main_preview_df)
+        
+        # 选择表头行
+        main_header_option = st.radio(
+            "请选择主表列名所在的行（查看上面的预览来确定）",
+            options=[0, 1, 2],
+            index=best_main_header if best_main_header is not None else 0,
+            format_func=lambda x: f"第{x+1}行",
+            key="main_header_option"
+        )
+    
+    if reference_file:
+        # 读取前3行数据用于预览
+        reference_preview_df = pd.read_excel(reference_file, header=None, nrows=3)
+        st.subheader("参考表数据预览")
+        st.write("前三行数据（用于确定列名所在行）:")
+        st.dataframe(reference_preview_df)
+        
+        # 自动检测最佳表头行
+        best_reference_header = find_best_header_row(reference_preview_df)
+        
+        # 选择表头行
+        reference_header_option = st.radio(
+            "请选择参考表列名所在的行（查看上面的预览来确定）",
+            options=[0, 1, 2],
+            index=best_reference_header if best_reference_header is not None else 0,
+            format_func=lambda x: f"第{x+1}行",
+            key="reference_header_option"
+        )
+    
     if main_file and reference_file:
         try:
-            # 读取两个文件
-            main_df = pd.read_excel(main_file)
-            reference_df = pd.read_excel(reference_file)
+            # 根据用户选择的表头行读取数据
+            main_df = pd.read_excel(main_file, header=main_header_option)
+            reference_df = pd.read_excel(reference_file, header=reference_header_option)
             
             st.subheader("主表数据预览")
             st.dataframe(main_df.head(10))
@@ -706,6 +748,7 @@ elif app_mode == "增强版VLOOKUP":
                 if st.button("执行增强VLOOKUP"):
                     if columns_to_add:
                         with st.spinner("正在执行增强VLOOKUP..."):
+                            from modules.enhanced_vlookup import enhanced_vlookup
                             result_df = enhanced_vlookup(
                                 main_df, reference_df, match_cols_main, match_cols_ref, 
                                 columns_to_add, join_type, handle_duplicates)
@@ -743,11 +786,53 @@ elif app_mode == "物流单号匹配":
     with col2:
         logistics_file = st.file_uploader("上传物流单号表", type=["xlsx"], key="logistics_file")
     
+    # 添加自动检测表头行的变量
+    pending_header_option = None
+    logistics_header_option = None
+    
+    if pending_shipment_file:
+        # 读取前3行数据用于预览
+        pending_preview_df = pd.read_excel(pending_shipment_file, header=None, nrows=3)
+        st.subheader("待发货明细表数据预览")
+        st.write("前三行数据（用于确定列名所在行）:")
+        st.dataframe(pending_preview_df)
+        
+        # 自动检测最佳表头行
+        best_pending_header = find_best_header_row(pending_preview_df)
+        
+        # 选择表头行
+        pending_header_option = st.radio(
+            "请选择待发货明细表列名所在的行（查看上面的预览来确定）",
+            options=[0, 1, 2],
+            index=best_pending_header if best_pending_header is not None else 0,
+            format_func=lambda x: f"第{x+1}行",
+            key="pending_header_option"
+        )
+    
+    if logistics_file:
+        # 读取前3行数据用于预览
+        logistics_preview_df = pd.read_excel(logistics_file, header=None, nrows=3)
+        st.subheader("物流单号表数据预览")
+        st.write("前三行数据（用于确定列名所在行）:")
+        st.dataframe(logistics_preview_df)
+        
+        # 自动检测最佳表头行
+        best_logistics_header = find_best_header_row(logistics_preview_df)
+        
+        # 选择表头行
+        logistics_header_option = st.radio(
+            "请选择物流单号表列名所在的行（查看上面的预览来确定）",
+            options=[0, 1, 2],
+            index=best_logistics_header if best_logistics_header is not None else 0,
+            format_func=lambda x: f"第{x+1}行",
+            key="logistics_header_option"
+        )
+    
     if pending_shipment_file and logistics_file:
         try:
-            # 读取两个文件
-            pending_shipment_df = pd.read_excel(pending_shipment_file)
-            logistics_df = pd.read_excel(logistics_file)
+            # 根据用户选择的表头行读取数据
+            pending_shipment_df = pd.read_excel(pending_shipment_file, header=pending_header_option)
+            logistics_df = pd.read_excel(logistics_file, header=logistics_header_option)
             
             st.subheader("待发货明细表数据预览")
             st.dataframe(pending_shipment_df.head(10))

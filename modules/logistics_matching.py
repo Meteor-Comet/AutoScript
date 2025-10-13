@@ -212,8 +212,8 @@ def match_logistics_info_fuzzy_phone(pending_shipment_df, logistics_df, pending_
         for name in logistics_df_unique[logistics_name_select].unique():
             logistics_name_groups[name] = logistics_df_unique[logistics_df_unique[logistics_name_select] == name].reset_index(drop=True)
         
-        # 跟踪每个姓名已经使用的索引
-        name_index_tracker = {}
+        # 为每个物流记录维护一个使用计数器，处理一个物流记录对应多个发货记录的情况
+        logistics_usage_count = {}
         
         # 获取重名列表
         name_counts = pending_shipment_df[pending_name_select].value_counts()
@@ -242,8 +242,12 @@ def match_logistics_info_fuzzy_phone(pending_shipment_df, logistics_df, pending_
                             best_match = logistics_row
                             match_stats['phone_match'] += 1
                             matched = True
-                            # 从name_group中移除已匹配的行，避免重复匹配
-                            logistics_name_groups[pending_name] = name_group.drop(i)
+                            
+                            # 更新使用计数器而不是移除记录，以支持一个物流记录对应多个发货记录
+                            logistics_record_key = (pending_name, str(logistics_phone), i)
+                            if logistics_record_key not in logistics_usage_count:
+                                logistics_usage_count[logistics_record_key] = 0
+                            logistics_usage_count[logistics_record_key] += 1
                             break
                     
                     if not matched:
@@ -251,15 +255,23 @@ def match_logistics_info_fuzzy_phone(pending_shipment_df, logistics_df, pending_
                         if not name_group.empty:
                             best_match = name_group.iloc[0]
                             match_stats['name_match'] += 1
-                            # 从name_group中移除已匹配的行
-                            logistics_name_groups[pending_name] = name_group.drop(name_group.index[0])
+                            
+                            # 更新使用计数器
+                            logistics_record_key = (pending_name, str(name_group.iloc[0][logistics_phone_select]) if logistics_phone_select else '', 0)
+                            if logistics_record_key not in logistics_usage_count:
+                                logistics_usage_count[logistics_record_key] = 0
+                            logistics_usage_count[logistics_record_key] += 1
                 else:
                     # 非重名或没有电话信息，使用第一个可用的记录
                     if not name_group.empty:
                         best_match = name_group.iloc[0]
                         match_stats['name_match'] += 1
-                        # 从name_group中移除已匹配的行
-                        logistics_name_groups[pending_name] = name_group.drop(name_group.index[0])
+                        
+                        # 更新使用计数器
+                        logistics_record_key = (pending_name, str(name_group.iloc[0][logistics_phone_select]) if logistics_phone_select else '', 0)
+                        if logistics_record_key not in logistics_usage_count:
+                            logistics_usage_count[logistics_record_key] = 0
+                        logistics_usage_count[logistics_record_key] += 1
                     else:
                         match_stats['no_match'] += 1
             else:

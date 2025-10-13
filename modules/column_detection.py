@@ -2,6 +2,57 @@ import pandas as pd
 import streamlit as st
 import re
 
+def find_best_header_row(df, max_rows=3):
+    """
+    自动查找最佳的表头行
+    
+    策略:
+    1. 检查前几行，寻找包含最少"Unnamed"列的行
+    2. 如果找不到，使用包含关键字最多的行
+    3. 如果仍然找不到，返回None（使用默认列名）
+    
+    参数:
+    df: DataFrame - 要分析的数据框
+    max_rows: int - 检查的最大行数
+    
+    返回:
+    int - 最佳表头行的索引，如果未找到则返回None
+    """
+    # 关键字列表，用于识别表头行
+    header_keywords = [
+        '姓名', '名称', '联系人', '收货人', '客户',  # 姓名相关
+        '电话', '手机', '联系方式', '联系电话', '号码',  # 电话相关
+        '地址', '收货地址', '详细地址', '邮寄地址'  # 地址相关
+    ]
+    
+    best_header_row = None
+    best_score = -1
+    min_unnamed_count = float('inf')
+    
+    # 检查前几行（或者表格的实际行数，取较小值）
+    max_row = min(max_rows, len(df))
+    
+    for i in range(max_row):
+        row = df.iloc[i]
+        # 将行转换为字符串列表
+        row_values = [str(x).lower() for x in row.values if pd.notna(x)]
+        
+        # 计算Unnamed列的数量
+        unnamed_count = sum(1 for val in row_values if 'unnamed' in val.lower())
+        
+        # 计算包含关键字的数量
+        keyword_count = sum(1 for keyword in header_keywords if any(keyword in val for val in row_values))
+        
+        # 评分规则：
+        # 1. 优先选择Unnamed列最少的行
+        # 2. 在Unnamed列数量相同的情况下，选择关键字最多的行
+        if unnamed_count < min_unnamed_count or (unnamed_count == min_unnamed_count and keyword_count > best_score):
+            min_unnamed_count = unnamed_count
+            best_score = keyword_count
+            best_header_row = i
+    
+    return best_header_row if best_header_row is not None and min_unnamed_count < len(df.columns) * 0.5 else None
+
 def find_header_row(df):
     """
     查找真正的表头行
