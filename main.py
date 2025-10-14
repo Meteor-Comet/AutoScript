@@ -401,39 +401,40 @@ elif app_mode == "导入明细到导单模板":
                 }
                 
                 # 规格转换选项
-                perform_conversion = st.checkbox("是否需要进行规格转换（个→箱）", value=False)
+                st.info("系统将自动对默认规格为'箱'的商品进行数量转换，您也可以选择额外需要转换的商品")
+                perform_conversion = st.checkbox("是否需要进行额外的规格转换（个→箱）", value=False)
                 
                 target_unit = None
                 selected_products_for_conversion = []
                 
-                if perform_conversion:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        target_unit = st.selectbox("目标单位", ["箱", "条"], index=0)
+                # 获取文件中的唯一商品
+                product_col_key = user_column_mapping.get('商品信息')
+                if product_col_key and product_col_key in df.columns:
+                    unique_products = df[product_col_key].dropna().unique()
+                    unique_products = [str(p) for p in unique_products if str(p).strip()]
                     
-                    # 获取文件中的唯一商品
-                    product_col_key = user_column_mapping.get('商品信息')
-                    if product_col_key and product_col_key in df.columns:
-                        unique_products = df[product_col_key].dropna().unique()
-                        unique_products = [str(p) for p in unique_products if str(p).strip()]
-                        
-                        # 筛选出有转换规则的商品
-                        products_with_rules = []
-                        for product in unique_products:
-                            for keyword in conversion_rules.keys():
-                                if (keyword == product or
-                                    product.startswith(keyword) or
-                                    product.endswith(keyword) or
-                                    keyword in product):
-                                    products_with_rules.append(product)
-                                    break
-                        
-                        products_with_rules = list(set(products_with_rules))  # 去重
+                    # 筛选出有转换规则的商品
+                    products_with_rules = []
+                    for product in unique_products:
+                        for keyword in conversion_rules.keys():
+                            if (keyword == product or
+                                product.startswith(keyword) or
+                                product.endswith(keyword) or
+                                keyword in product):
+                                products_with_rules.append(product)
+                                break
+                    
+                    products_with_rules = list(set(products_with_rules))  # 去重
+                    
+                    if perform_conversion:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            target_unit = st.selectbox("目标单位", ["箱", "条"], index=0)
                         
                         if products_with_rules:
                             with col2:
                                 selected_products_for_conversion = st.multiselect(
-                                    "选择需要转换规格的商品",
+                                    "选择需要额外转换规格的商品",
                                     products_with_rules,
                                     default=products_with_rules,
                                     key="products_to_convert"
@@ -497,8 +498,25 @@ elif app_mode == "导入明细到导单模板":
                                 final_quantity = original_quantity
                                 final_spec = default_spec  # 使用默认规格
                                 
-                                # 如果需要进行规格转换
-                                if perform_conversion and target_unit and item['商品信息'] in selected_products_for_conversion:
+                                # 对于默认规格为箱的商品，自动进行数量转换
+                                if default_spec == '箱':
+                                    # 查找匹配的转换规则
+                                    multiplier = None
+                                    for keyword, mult in conversion_rules.items():
+                                        if (keyword == item['商品信息'] or
+                                            item['商品信息'].startswith(keyword) or
+                                            item['商品信息'].endswith(keyword) or
+                                            keyword in item['商品信息']):
+                                            multiplier = mult
+                                            break
+                                    
+                                    if multiplier and multiplier > 1:
+                                        # 进行转换：个 → 箱
+                                        final_quantity = original_quantity / multiplier
+                                        conversion_count += 1
+                                
+                                # 如果需要进行额外的规格转换
+                                elif perform_conversion and target_unit and item['商品信息'] in selected_products_for_conversion:
                                     # 查找匹配的转换规则
                                     multiplier = None
                                     for keyword, mult in conversion_rules.items():
