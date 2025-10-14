@@ -160,11 +160,16 @@ def batch_process_files(uploaded_files):
             st.warning("没有成功处理任何数据")
             return None
 
-def compare_data(发货明细_df, 供应商订单_df):
+def compare_data(发货明细_df, 供应商订单_df, match_method='name'):
     """
     核对发放明细与供应商订单数据
     只核对供应商订单中存在的记录（以供应商订单为准）
     分别标识数量不一致和没找到对应记录的情况
+    
+    Parameters:
+    发货明细_df: 发货明细数据框
+    供应商订单_df: 供应商订单数据框
+    match_method: 匹配方式，'name'表示按姓名匹配，'scheme_product'表示按方案编号+商品名称匹配
     """
     try:
         # 筛选供应商为怡亚通的订单
@@ -174,21 +179,40 @@ def compare_data(发货明细_df, 供应商订单_df):
         order_summary = yiyatong_orders[['方案编号', '收货人', '商品名称', '数量']].copy()
         order_summary.rename(columns={'数量': '订单数量'}, inplace=True)
         
-        # 重命名发货明细列以便后续处理
-        delivery_summary = 发货明细_df[['领用说明', '收货人', '产品名称', '数量']].copy()
-        delivery_summary.rename(columns={
-            '领用说明': '方案编号',
-            '产品名称': '商品名称',
-            '数量': '发货数量'
-        }, inplace=True)
-        
-        # 按方案编号、收货人、商品名称分组汇总数量
-        order_grouped = order_summary.groupby(['方案编号', '收货人', '商品名称'])['订单数量'].sum().reset_index()
-        delivery_grouped = delivery_summary.groupby(['方案编号', '收货人', '商品名称'])['发货数量'].sum().reset_index()
-        
-        # 以供应商订单为准进行核对
-        # 左连接确保所有供应商订单记录都被包含
-        merged_data = pd.merge(order_grouped, delivery_grouped, on=['方案编号', '收货人', '商品名称'], how='left')
+        if match_method == 'name':
+            # 按姓名匹配
+            # 重命名发货明细列以便后续处理
+            delivery_summary = 发货明细_df[['领用说明', '收货人', '产品名称', '数量']].copy()
+            delivery_summary.rename(columns={
+                '领用说明': '方案编号',
+                '产品名称': '商品名称',
+                '数量': '发货数量'
+            }, inplace=True)
+            
+            # 按方案编号、收货人、商品名称分组汇总数量
+            order_grouped = order_summary.groupby(['方案编号', '收货人', '商品名称'])['订单数量'].sum().reset_index()
+            delivery_grouped = delivery_summary.groupby(['方案编号', '收货人', '商品名称'])['发货数量'].sum().reset_index()
+            
+            # 以供应商订单为准进行核对
+            # 左连接确保所有供应商订单记录都被包含
+            merged_data = pd.merge(order_grouped, delivery_grouped, on=['方案编号', '收货人', '商品名称'], how='left')
+        else:  # scheme_product
+            # 按方案编号+商品名称匹配
+            # 重命名发货明细列以便后续处理
+            delivery_summary = 发货明细_df[['领用说明', '产品名称', '数量']].copy()
+            delivery_summary.rename(columns={
+                '领用说明': '方案编号',
+                '产品名称': '商品名称',
+                '数量': '发货数量'
+            }, inplace=True)
+            
+            # 按方案编号、商品名称分组汇总数量（不考虑收货人）
+            order_grouped = order_summary.groupby(['方案编号', '商品名称'])['订单数量'].sum().reset_index()
+            delivery_grouped = delivery_summary.groupby(['方案编号', '商品名称'])['发货数量'].sum().reset_index()
+            
+            # 以供应商订单为准进行核对
+            # 左连接确保所有供应商订单记录都被包含
+            merged_data = pd.merge(order_grouped, delivery_grouped, on=['方案编号', '商品名称'], how='left')
         
         # 填充NaN值（发货明细中没有对应记录的情况）
         merged_data['发货数量'] = merged_data['发货数量'].fillna(0)
@@ -220,9 +244,14 @@ def compare_data(发货明细_df, 供应商订单_df):
         empty_df = pd.DataFrame()
         return empty_df, empty_df, empty_df, empty_df
 
-def mark_procurement_info(发货明细_df, 供应商订单_df):
+def mark_procurement_info(发货明细_df, 供应商订单_df, match_method='name'):
     """
     根据供应商订单中的'一件代发'字段标记发货明细的'是否集采'列
+    
+    Parameters:
+    发货明细_df: 发货明细数据框
+    供应商订单_df: 供应商订单数据框
+    match_method: 匹配方式，'name'表示按姓名匹配，'scheme_product'表示按方案编号+商品名称匹配
     """
     try:
         # 筛选供应商为怡亚通的订单
@@ -233,27 +262,48 @@ def mark_procurement_info(发货明细_df, 供应商订单_df):
             lambda x: '非集采' if str(x).strip() == '是' else '集采'
         )
         
-        # 按方案编号、收货人、联系方式和商品名称分组，确定每个组合的集采状态
-        # 如果任何一个订单是集采，则整个组合为集采
-        procurement_status = yiyatong_orders.groupby(['方案编号', '收货人', '联系方式', '商品名称'])['是否集采'].apply(
-            lambda x: '集采' if '集采' in x.values else '非集采'
-        ).reset_index()
-        
-        # 创建一个用于匹配的发货明细副本
-        发货明细_marked = 发货明细_df.copy()
-        
-        # 初始化'是否集采'列为空字符串而不是None
-        发货明细_marked['是否集采'] = ''
-        
-        # 根据匹配条件更新'是否集采'列
-        for _, row in procurement_status.iterrows():
-            mask = (
-                (发货明细_marked['领用说明'] == row['方案编号']) &
-                (发货明细_marked['收货人'] == row['收货人']) &
-                (发货明细_marked['收货人电话'] == row['联系方式']) &
-                (发货明细_marked['产品名称'] == row['商品名称'])
-            )
-            发货明细_marked.loc[mask, '是否集采'] = row['是否集采']
+        if match_method == 'name':
+            # 按方案编号、收货人、联系方式和商品名称分组，确定每个组合的集采状态
+            # 如果任何一个订单是集采，则整个组合为集采
+            procurement_status = yiyatong_orders.groupby(['方案编号', '收货人', '联系方式', '商品名称'])['是否集采'].apply(
+                lambda x: '集采' if '集采' in x.values else '非集采'
+            ).reset_index()
+            
+            # 创建一个用于匹配的发货明细副本
+            发货明细_marked = 发货明细_df.copy()
+            
+            # 初始化'是否集采'列为空字符串而不是None
+            发货明细_marked['是否集采'] = ''
+            
+            # 根据匹配条件更新'是否集采'列
+            for _, row in procurement_status.iterrows():
+                mask = (
+                    (发货明细_marked['领用说明'] == row['方案编号']) &
+                    (发货明细_marked['收货人'] == row['收货人']) &
+                    (发货明细_marked['收货人电话'] == row['联系方式']) &
+                    (发货明细_marked['产品名称'] == row['商品名称'])
+                )
+                发货明细_marked.loc[mask, '是否集采'] = row['是否集采']
+        else:  # scheme_product
+            # 按方案编号和商品名称分组，确定每个组合的集采状态
+            # 如果任何一个订单是集采，则整个组合为集采
+            procurement_status = yiyatong_orders.groupby(['方案编号', '商品名称'])['是否集采'].apply(
+                lambda x: '集采' if '集采' in x.values else '非集采'
+            ).reset_index()
+            
+            # 创建一个用于匹配的发货明细副本
+            发货明细_marked = 发货明细_df.copy()
+            
+            # 初始化'是否集采'列为空字符串而不是None
+            发货明细_marked['是否集采'] = ''
+            
+            # 根据匹配条件更新'是否集采'列
+            for _, row in procurement_status.iterrows():
+                mask = (
+                    (发货明细_marked['领用说明'] == row['方案编号']) &
+                    (发货明细_marked['产品名称'] == row['商品名称'])
+                )
+                发货明细_marked.loc[mask, '是否集采'] = row['是否集采']
         
         return 发货明细_marked
         

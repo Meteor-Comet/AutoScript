@@ -101,6 +101,18 @@ elif app_mode == "核对发放明细与供应商订单":
         perform_verification = st.checkbox("核对发放明细与供应商订单", value=True)
         perform_procurement_marking = st.checkbox("标记集采信息", value=True)
         
+        # 添加匹配方式选择
+        st.subheader("匹配方式")
+        match_method = st.radio(
+            "选择匹配方式",
+            ('按姓名+方案编号+商品名称匹配', '按方案编号+商品名称匹配'),
+            index=1,  # 默认选择方案编号+商品名称匹配
+            help="按姓名+方案编号+商品名称匹配：根据收货人、方案编号和商品名称匹配；按方案编号+商品名称匹配：根据方案编号和商品名称匹配，不考虑收货人"
+        )
+        
+        # 确定内部使用的匹配方式参数
+        internal_match_method = 'name' if match_method == '按姓名+方案编号+商品名称匹配' else 'scheme_product'
+        
         if st.button("开始处理"):
             with st.spinner("正在处理数据..."):
                 # 保存上传的文件到临时目录
@@ -146,7 +158,7 @@ elif app_mode == "核对发放明细与供应商订单":
                         # 执行核对操作
                         if perform_verification:
                             # 进行数据核对
-                            consistent_records, inconsistent_records, not_found_records, _ = compare_data(发货明细_df, 供应商订单_df)
+                            consistent_records, inconsistent_records, not_found_records, _ = compare_data(发货明细_df, 供应商订单_df, internal_match_method)
                             
                             # 显示核对结果
                             st.success("数据核对完成！")
@@ -154,20 +166,26 @@ elif app_mode == "核对发放明细与供应商订单":
                             # 显示一致的记录
                             if not consistent_records.empty:
                                 st.subheader("数量一致的记录")
-                                st.dataframe(consistent_records)
-                                st.success(f"发现 {len(consistent_records)} 条数量一致的记录")
+                                # 优化显示：添加记录数统计和可折叠显示
+                                st.info(f"发现 {len(consistent_records)} 条数量一致的记录")
+                                with st.expander("点击查看详细记录"):
+                                    st.dataframe(consistent_records)
                             
                             # 显示数量不一致的记录
                             if not inconsistent_records.empty:
                                 st.subheader("数量不一致的记录")
-                                st.dataframe(inconsistent_records)
+                                # 优化显示：添加记录数统计和可折叠显示
                                 st.warning(f"发现 {len(inconsistent_records)} 条数量不一致的记录")
+                                with st.expander("点击查看详细记录"):
+                                    st.dataframe(inconsistent_records)
                             
                             # 显示发放明细中未找到的记录
                             if not not_found_records.empty:
                                 st.subheader("发放明细中未找到的记录")
-                                st.dataframe(not_found_records)
+                                # 优化显示：添加记录数统计和可折叠显示
                                 st.error(f"发现 {len(not_found_records)} 条发放明细中未找到的记录")
+                                with st.expander("点击查看详细记录"):
+                                    st.dataframe(not_found_records)
                             
                             # 统计信息
                             total_records = len(consistent_records) + len(inconsistent_records) + len(not_found_records)
@@ -180,7 +198,7 @@ elif app_mode == "核对发放明细与供应商订单":
                         # 执行集采标记操作
                         if perform_procurement_marking:
                             # 标记集采信息
-                            marked_df = mark_procurement_info(发货明细_df, 供应商订单_df)
+                            marked_df = mark_procurement_info(发货明细_df, 供应商订单_df, internal_match_method)
                             
                             if marked_df is not None:
                                 final_result = marked_df
@@ -204,19 +222,22 @@ elif app_mode == "核对发放明细与供应商订单":
                                 procurement_records = marked_df[marked_df['是否集采'] == '集采']
                                 if not procurement_records.empty:
                                     st.write("集采记录:")
-                                    st.dataframe(procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                    with st.expander("点击查看详细记录"):
+                                        st.dataframe(procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
                                 
                                 # 显示非集采记录
                                 non_procurement_records = marked_df[marked_df['是否集采'] == '非集采']
                                 if not non_procurement_records.empty:
                                     st.write("非集采记录:")
-                                    st.dataframe(non_procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                    with st.expander("点击查看详细记录"):
+                                        st.dataframe(non_procurement_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
                                 
                                 # 显示未找到对应信息的记录
                                 blank_records = marked_df[marked_df['是否集采'] == '']
                                 if not blank_records.empty:
                                     st.write("未在供应商订单中找到的记录:")
-                                    st.dataframe(blank_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
+                                    with st.expander("点击查看详细记录"):
+                                        st.dataframe(blank_records[['领用说明', '收货人', '收货人电话', '产品名称', '数量', '是否集采']].head(20))
                                 
                                 # 显示部分标记结果
                                 st.subheader("标记结果预览")
