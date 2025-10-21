@@ -964,6 +964,8 @@ elif app_mode == "物流单号匹配":
             # 如果选择电话匹配，显示电话列选择
             pending_phone_select = None
             logistics_phone_select = None
+            pending_address_select = None
+            logistics_address_select = None
             
             if match_method == "使用电话模糊匹配":
                 st.subheader("电话列匹配")
@@ -995,6 +997,38 @@ elif app_mode == "物流单号匹配":
                         "物流单号表中的电话列",
                         logistics_df.columns,
                         index=logistics_df.columns.tolist().index(logistics_phone_col) if logistics_phone_col else 0
+                    )
+                
+                # 添加地址列选择
+                st.subheader("地址列匹配（用于精确匹配）")
+                # 在待发货明细表中查找地址列
+                address_keywords = ['地址', '收货地址', '详细地址', '邮寄地址']
+                pending_address_col = None
+                logistics_address_col = None
+                
+                for col in pending_shipment_df.columns:
+                    if any(keyword in col for keyword in address_keywords):
+                        pending_address_col = col
+                        break
+                
+                # 在物流单号表中查找地址列
+                for col in logistics_df.columns:
+                    if any(keyword in col for keyword in address_keywords):
+                        logistics_address_col = col
+                        break
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    pending_address_select = st.selectbox(
+                        "待发货明细表中的地址列",
+                        pending_shipment_df.columns,
+                        index=pending_shipment_df.columns.tolist().index(pending_address_col) if pending_address_col else 0
+                    )
+                with col2:
+                    logistics_address_select = st.selectbox(
+                        "物流单号表中的地址列",
+                        logistics_df.columns,
+                        index=logistics_df.columns.tolist().index(logistics_address_col) if logistics_address_col else 0
                     )
             
             # 选择要添加的列
@@ -1070,13 +1104,15 @@ elif app_mode == "物流单号匹配":
                     with st.spinner("正在执行匹配..."):
                         try:
                             # 根据用户选择的匹配方式执行匹配
-                            if match_method == "使用电话模糊匹配" and pending_phone_select and logistics_phone_select:
+                            if match_method == "使用电话模糊匹配":
                                 from modules.logistics_matching import match_logistics_info_fuzzy_phone
                                 result_df = match_logistics_info_fuzzy_phone(
                                     pending_shipment_df, logistics_df, pending_name_select,
                                     logistics_name_select, columns_to_add, handle_duplicates,
                                     pending_phone_select=pending_phone_select,
-                                    logistics_phone_select=logistics_phone_select)
+                                    logistics_phone_select=logistics_phone_select,
+                                    pending_address_select=pending_address_select,
+                                    logistics_address_select=logistics_address_select)
                             else:
                                 # 使用常规匹配（姓名匹配）
                                 from modules.logistics_matching import match_logistics_info
